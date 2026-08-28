@@ -1,0 +1,12 @@
+cpu: CPU.Sparc @ sysbus
+    cpuType: "leon3"
+
+// ЖОРСТКЕ ОБМЕЖЕННЯ ESA: Виділено строго 16 МБ RAM (0x01000000 байт) під експериментальне ПЗ
+ram: Memory.MappedMemory @ sysbus 0x3FFF0000
+    size: 0x01000000
+
+// Вирівняна заглушка пам'яті для системних регістрів компілятора
+system_regs: Memory.MappedMemory @ sysbus 0xFFFFF000
+    size: 0x1000
+
+uart: UART.NS16550 @ sysbus 0x80000100
