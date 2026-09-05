@@ -132,22 +132,6 @@ python .\telemetry_live_visualizer.py
 
 Upon connection, the onboard application will continue processing the 1020x1020 image grids, routing the compiled binary stream dynamically over the loopback interface (`127.0.0.1:12345`) to render a real-time mathematical heatmap of the asteroid terrain in the Ground Segment visualizer window.
 
-## 🏁 Deployment & Execution Procedure
-**Recommended Project Workspace Path:** `C:\Projects\AURA-main\`  
-*All command line steps below assume that your terminal is opened and executing from the project root directory (`cd C:\Projects\AURA-main\`).*
-
-## Step 2: Launch the Spacecraft Emulation Framework
-In the primary command terminal opened at C:\Projects\AURA-main\, initiate the software-in-the-loop validation inside the Renode environment to boot the LEON3 processor and start streaming data:
-powershell renode .\script.resc 
-
-## Step 3: Initialize the Ground Segment Visualizer
-Once the emulation starts running and the virtual spacecraft begins processing frames, open a separate terminal window at C:\Projects\AURA-main\ and launch the telemetry live decoder to bind to the active stream:
-
-```powershell 
-python .\telemetry_live_visualizer.py 
-```
-Upon connection, the onboard application will continue processing the 1020x1020 image grids, routing the compiled binary stream dynamically over the loopback interface (127.0.0.1:12345) to render a real-time mathematical heatmap of the asteroid terrain in the Ground Segment visualizer window.
-
 ---
 
 ## 🔮 Live Interactive Vision Prototype (Google AI Studio)
