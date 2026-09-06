@@ -145,6 +145,8 @@ Upon connection, the onboard application will continue processing the 1020x1020 
 ## 🔮 Live Interactive Vision Prototype (Google AI Studio)
 For immediate hardware-in-the-loop and live vision pipeline exploration without setting up the local cross-compilation toolchain, an interactive web prototype is deployed on Google AI Studio.
 
+https://www.youtube.com/shorts/gKMWbWaEmZ0
+
 You can access the environment directly via:
 👉 **[AURA Vision Concept Tracker (Google AI Studio App)](https://aistudio.google.com/apps/51371c21-635f-4a75-856a-ea37b0097875)** *(Requires a valid Google AI Studio login).*
 
