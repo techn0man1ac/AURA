@@ -7,9 +7,9 @@ AURA is engineered specifically within the **ESA OSIP** framework as a direct so
 
 ![Screenshot of AURA V0.2](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/Figure_1.png)
 
-[![TRL](https://img.shields.io/badge/TRL-4-blue.svg)](#technology-readiness)
-[![Architecture](https://img.shields.io/badge/Target-LEON3%20%2F%20SPARC%20V8-informational.svg)](#technical-profile)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
+[![TRL](https://img.shields.io/badge/TRL-4-blue.svg)](https://github.com/techn0man1ac/AURA/tree/main#-deployment--execution-procedure)
+[![Architecture](https://img.shields.io/badge/Target-LEON3%20%2F%20SPARC%20V8-informational.svg)](https://github.com/techn0man1ac/AURA/tree/main#-technical-architecture--core-constraints)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/techn0man1ac/AURA/blob/main/LICENSE)
 
 ---
 
