@@ -1,13 +1,15 @@
 # AURA: Autonomous Unsupervised Feature-Tracking for Real-Time Deep-Space Navigation
 An ultra-lightweight, hardware-agnostic embedded vision subsystem designed for real-time edge computing, autonomous object mapping, and telemetry visualization. 
 
-[![TRL](https://img.shields.io/badge/TRL-4-blue.svg)](#technology-readiness)
-[![Architecture](https://img.shields.io/badge/Target-LEON3%20%2F%20SPARC%20V8-informational.svg)](#technical-profile)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
+![Visual represents the project](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_Deep-Space_Navigation_Infographic.png)
+
+AURA is engineered specifically within the **ESA OSIP** framework as a direct software solution to meet the core objectives of the **Hera Extended Mission Phase (Autonomous Software Experiments on Hera)**. Developed for execution on the spacecraft's second processor core (Core 1), the system operates within a protected sandbox environment alongside flight-critical systems, achieving **Technology Readiness Level 4 (TRL 4)** validation.
 
 ![Screenshot of AURA V0.2](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/Figure_1.png)
 
-AURA is engineered specifically within the **ESA OSIP** framework as a direct software solution to meet the core objectives of the **Hera Extended Mission Phase (Autonomous Software Experiments on Hera)**. Developed for execution on the spacecraft's second processor core (Core 1), the system operates within a protected sandbox environment alongside flight-critical systems, achieving **Technology Readiness Level 4 (TRL 4)** validation.
+[![TRL](https://img.shields.io/badge/TRL-4-blue.svg)](#technology-readiness)
+[![Architecture](https://img.shields.io/badge/Target-LEON3%20%2F%20SPARC%20V8-informational.svg)](#technical-profile)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 
 ---
 
