@@ -159,156 +159,176 @@ You can access the environment directly via:
 
 ---
 
-# 🗺️ AURA Roadmap
+# 🗺️ AURA Development Roadmap
 
-AURA is evolving along four complementary research and engineering directions. All branches originate from the same core concept: representing visual information through local entropy and information density rather than processing every pixel equally.
+AURA is evolving along four complementary research and engineering branches. All branches originate from the same core principle:
 
-## Branch 1 — Progressive Telemetry Compression & Information Prioritisation
-**Priority: High**
+> Information should be processed according to its informational value rather than treating every pixel equally.
 
-Objective: Reduce deep-space downlink requirements by transmitting progressively richer information layers only when scientifically justified.
-
-### Current Stage
-- Local contrast maxima extraction
-- Sparse feature cloud generation
-- Entropy-based image block analysis
-- Binary telemetry serialization
-
-### Planned Evolution
-1. Sparse Feature Cloud (~1 KB)
-   - Top-N high-information points
-   - Fast scene assessment
-   - Ground-based decision gate
-
-2. Entropy Heatmap (~20 KB)
-   - Information density distribution
-   - Region-of-interest identification
-   - Scientific relevance estimation
-
-3. Full Image Request
-   - Download only when previous stages indicate valuable content
-   - Minimise unnecessary bandwidth consumption
-
-### Long-Term Goal
-A hierarchical visual telemetry protocol capable of reducing deep-space communication load while preserving scientific value.
+The roadmap below reflects the current development priorities and long-term vision of the project.
 
 ---
 
-## Branch 2 — Low-Information Region Suppression
-**Priority: High**
+## Phase 1 — Progressive Information Reduction & Telemetry Prioritisation
 
-Objective: Automatically identify image regions carrying little or no scientific information.
+### Current Focus
 
-### Research Topics
-- Detection of low-entropy regions
-- Background suppression
-- Empty-space filtering
-- Noise and redundancy reduction
+The primary objective is reducing deep-space telemetry requirements by transmitting increasingly detailed representations only when necessary.
 
-### Potential Applications
-- Deep-space imagery
-- Asteroid observations
-- Autonomous scientific target selection
-- Computational workload reduction
+Pipeline concept:
 
-### Long-Term Goal
-Enable spacecraft systems to focus processing power only on information-rich image regions.
+```text
+Raw Image
+    ↓
+Feature Point Cloud (~1 KB)
+    ↓
+Entropy Heatmap (~20 KB)
+    ↓
+Full Image (~1 MB)
+```
+
+### Goals
+
+- Detect local contrast maxima.
+- Generate sparse feature point clouds.
+- Reduce downlink requirements through hierarchical data products.
+- Allow ground operators to decide whether additional data transmission is justified.
+- Prioritise scientifically valuable observations before transmitting complete image frames.
+
+### Expected Outcome
+
+A spacecraft can transmit a compact informational summary first, significantly reducing unnecessary bandwidth consumption during deep-space operations.
 
 ---
 
-## Branch 3 — Entropy-Based Visual Navigation
-**Priority: Medium / Long-Term Research Direction**
+## Phase 2 — Low-Information Region Suppression
 
-Objective: Investigate whether entropy-derived feature structures can support autonomous spacecraft navigation.
+### Objective
 
-### Concept
-Instead of tracking raw image features directly:
+Identify regions that contribute little scientific value and exclude them from further processing.
+
+Examples include:
+
+- Deep-space background
+- Uniform sky regions
+- Low-detail surfaces
+- Sensor noise dominated areas
+
+### Goals
+
+- Automatically classify low-information regions.
+- Reduce computational load on embedded processors.
+- Focus processing resources on scientifically relevant structures.
+- Improve overall onboard decision efficiency.
+
+### Expected Outcome
+
+More processing power becomes available for high-value observations while reducing unnecessary calculations.
+
+---
+
+## Phase 3 — Entropy-Based Visual Navigation
+
+### Long-Term Research Direction
+
+Investigate whether entropy-derived feature structures can support autonomous spacecraft navigation.
+
+Instead of analysing complete image frames, AURA may operate on compact informational representations extracted from the scene.
+
+Pipeline concept:
 
 ```text
 Image
- ↓
+   ↓
 Entropy Analysis
- ↓
-Information Points
- ↓
-Feature Constellations
- ↓
+   ↓
+Feature Point Extraction
+   ↓
+Constellation Generation
+   ↓
+Inter-Frame Tracking
+   ↓
 Motion Estimation
- ↓
+   ↓
 Navigation Support
 ```
 
-### Research Questions
-- Can entropy-selected features provide stable navigation landmarks?
-- Can feature constellations be tracked between frames?
-- Can spacecraft motion be estimated from constellation evolution?
-- Can entropy-based filtering reduce navigation computational costs?
+### Feature Constellations
 
-### Potential Applications
-- Asteroid proximity operations
-- Autonomous optical navigation
+AURA can represent high-information regions as connected structures ("feature constellations").
+
+These constellations:
+
+- Remain linked to physical scene features.
+- Move consistently across image sequences.
+- May provide a lightweight representation for visual motion estimation.
+- Could support future visual odometry and autonomous navigation experiments.
+
+Potential applications include:
+
 - Relative motion estimation
-- Future deep-space autonomous missions
+- Surface tracking
+- Landmark recognition
+- Autonomous proximity operations around asteroids and small bodies
 
-### Long-Term Goal
-Create an ultra-lightweight visual navigation subsystem suitable for radiation-hardened embedded processors.
+### Research Question
+
+Can entropy-derived feature constellations provide a computationally efficient alternative or complement to traditional feature-tracking approaches used in spacecraft visual navigation?
 
 ---
 
-## Branch 4 — Multisensor Joint Entropy Framework
-**Priority: Exploratory / Future Research**
+## Phase 4 — Multidimensional Sensor Fusion & Joint Entropy
 
-Objective: Extend entropy analysis beyond camera imagery into a multidimensional sensor space.
+### Future Vision
 
-### Candidate Data Sources
+Extend AURA beyond image processing by incorporating additional spacecraft sensors into a unified informational framework.
+
+Potential data sources:
+
 - Optical cameras
 - Infrared sensors
+- Laser ranging systems
+- IMU measurements
+- Star trackers
 - Thermal sensors
-- Laser rangefinders
-- IMU / accelerometer data
-- Spacecraft telemetry channels
+- Scientific payload instruments
 
-### Concept
+### Goals
 
-```text
-Camera Data
-      +
-Thermal Data
-      +
-Range Data
-      +
-IMU Data
-      ↓
-Joint Entropy Model
-      ↓
-Anomaly Detection
-      ↓
-Autonomous Decision Support
-```
+- Compute multidimensional joint entropy across heterogeneous sensor inputs.
+- Detect environmental changes through information-state transitions.
+- Trigger autonomous decision-making processes.
+- Build a generalized information-awareness layer for future spacecraft systems.
 
-### Research Questions
-- Can multiple sensors be fused through joint entropy?
-- Can unexpected environmental changes be detected earlier?
-- Can entropy become a generic decision metric across spacecraft subsystems?
+### Example Scenario
 
-### Long-Term Goal
-Develop an information-centric autonomous perception framework capable of detecting and reacting to meaningful environmental changes without explicit predefined rules.
+A previously empty field of view suddenly contains an object.
+
+Simultaneously:
+
+- Optical entropy increases.
+- Infrared readings change.
+- Range measurements become available.
+
+The combined entropy signature indicates a significant environmental event and can automatically trigger higher-level mission logic.
+
+### Expected Outcome
+
+AURA evolves from an image-processing subsystem into a general-purpose information-driven perception framework for autonomous space systems.
 
 ---
 
-## Vision Beyond V1.0
+## Beyond the Roadmap
 
-The long-term vision of AURA is to evolve from an entropy-based image prioritisation engine into a lightweight autonomous perception framework for deep-space systems, capable of:
+Future development may ultimately lead toward:
 
-- Information-aware telemetry generation
-- Intelligent data reduction
-- Autonomous target prioritisation
-- Vision-assisted navigation
-- Multisensor situational awareness
+- Autonomous onboard scientific prioritisation
+- Information-driven spacecraft decision support
+- Vision-assisted guidance, navigation and control (GNC)
+- Adaptive telemetry generation
+- Self-directed observation planning
 
-AURA ultimately explores a simple question:
-
-> Can a spacecraft make better decisions by understanding where information exists before attempting to understand what the information represents?
+The long-term vision of AURA is to transform raw sensor streams into compact, actionable informational representations suitable for resource-constrained deep-space missions. 
 
 ---
 
