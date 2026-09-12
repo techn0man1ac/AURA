@@ -159,6 +159,159 @@ You can access the environment directly via:
 
 ---
 
+# 🗺️ AURA Roadmap
+
+AURA is evolving along four complementary research and engineering directions. All branches originate from the same core concept: representing visual information through local entropy and information density rather than processing every pixel equally.
+
+## Branch 1 — Progressive Telemetry Compression & Information Prioritisation
+**Priority: High**
+
+Objective: Reduce deep-space downlink requirements by transmitting progressively richer information layers only when scientifically justified.
+
+### Current Stage
+- Local contrast maxima extraction
+- Sparse feature cloud generation
+- Entropy-based image block analysis
+- Binary telemetry serialization
+
+### Planned Evolution
+1. Sparse Feature Cloud (~1 KB)
+   - Top-N high-information points
+   - Fast scene assessment
+   - Ground-based decision gate
+
+2. Entropy Heatmap (~20 KB)
+   - Information density distribution
+   - Region-of-interest identification
+   - Scientific relevance estimation
+
+3. Full Image Request
+   - Download only when previous stages indicate valuable content
+   - Minimise unnecessary bandwidth consumption
+
+### Long-Term Goal
+A hierarchical visual telemetry protocol capable of reducing deep-space communication load while preserving scientific value.
+
+---
+
+## Branch 2 — Low-Information Region Suppression
+**Priority: High**
+
+Objective: Automatically identify image regions carrying little or no scientific information.
+
+### Research Topics
+- Detection of low-entropy regions
+- Background suppression
+- Empty-space filtering
+- Noise and redundancy reduction
+
+### Potential Applications
+- Deep-space imagery
+- Asteroid observations
+- Autonomous scientific target selection
+- Computational workload reduction
+
+### Long-Term Goal
+Enable spacecraft systems to focus processing power only on information-rich image regions.
+
+---
+
+## Branch 3 — Entropy-Based Visual Navigation
+**Priority: Medium / Long-Term Research Direction**
+
+Objective: Investigate whether entropy-derived feature structures can support autonomous spacecraft navigation.
+
+### Concept
+Instead of tracking raw image features directly:
+
+```text
+Image
+ ↓
+Entropy Analysis
+ ↓
+Information Points
+ ↓
+Feature Constellations
+ ↓
+Motion Estimation
+ ↓
+Navigation Support
+```
+
+### Research Questions
+- Can entropy-selected features provide stable navigation landmarks?
+- Can feature constellations be tracked between frames?
+- Can spacecraft motion be estimated from constellation evolution?
+- Can entropy-based filtering reduce navigation computational costs?
+
+### Potential Applications
+- Asteroid proximity operations
+- Autonomous optical navigation
+- Relative motion estimation
+- Future deep-space autonomous missions
+
+### Long-Term Goal
+Create an ultra-lightweight visual navigation subsystem suitable for radiation-hardened embedded processors.
+
+---
+
+## Branch 4 — Multisensor Joint Entropy Framework
+**Priority: Exploratory / Future Research**
+
+Objective: Extend entropy analysis beyond camera imagery into a multidimensional sensor space.
+
+### Candidate Data Sources
+- Optical cameras
+- Infrared sensors
+- Thermal sensors
+- Laser rangefinders
+- IMU / accelerometer data
+- Spacecraft telemetry channels
+
+### Concept
+
+```text
+Camera Data
+      +
+Thermal Data
+      +
+Range Data
+      +
+IMU Data
+      ↓
+Joint Entropy Model
+      ↓
+Anomaly Detection
+      ↓
+Autonomous Decision Support
+```
+
+### Research Questions
+- Can multiple sensors be fused through joint entropy?
+- Can unexpected environmental changes be detected earlier?
+- Can entropy become a generic decision metric across spacecraft subsystems?
+
+### Long-Term Goal
+Develop an information-centric autonomous perception framework capable of detecting and reacting to meaningful environmental changes without explicit predefined rules.
+
+---
+
+## Vision Beyond V1.0
+
+The long-term vision of AURA is to evolve from an entropy-based image prioritisation engine into a lightweight autonomous perception framework for deep-space systems, capable of:
+
+- Information-aware telemetry generation
+- Intelligent data reduction
+- Autonomous target prioritisation
+- Vision-assisted navigation
+- Multisensor situational awareness
+
+AURA ultimately explores a simple question:
+
+> Can a spacecraft make better decisions by understanding where information exists before attempting to understand what the information represents?
+
+---
+
 ☝️ Disclaimer
 
 AURA is an independent research / engineering prototype. References to ESA, Hera, LEON3, GR712RC, or related mission and hardware documentation are used for context and technical compatibility only. This repository does not imply endorsement, certification, sponsorship, or official affiliation unless explicitly stated by the respective organisation.
