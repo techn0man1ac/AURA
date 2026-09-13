@@ -128,12 +128,12 @@ To recompile the flight software from source using the official Aeroflex Gaisler
 
 ### Step 2: Launch the Spacecraft Emulation Framework
 
-![LEON3 Remode Emulations screenshot](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/LEON3_Remode_Emulations.png)
-
 In the primary command terminal opened at **`C:\Projects\AURA-main\`**, initiate the software-in-the-loop validation inside the Renode environment to boot the LEON3 processor and start streaming data:
 ```powershell
 renode .\script.resc
 ```
+
+![LEON3 Remode Emulations screenshot](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/LEON3_Remode_Emulations.png)
 
 ### Step 3: Initialize the Ground Segment Visualizer
 Once the emulation starts running and the virtual spacecraft begins processing frames, open a separate terminal window at **`C:\Projects\AURA-main\`** and launch the telemetry live decoder to bind to the active stream:
