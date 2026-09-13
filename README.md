@@ -3,7 +3,7 @@ An ultra-lightweight, hardware-agnostic embedded vision subsystem designed for r
 
 ![AURA simple visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_simple.png)
 
-AURA is engineered specifically within the **ESA OSIP** framework as a direct software solution to meet the core objectives of the **Hera Extended Mission Phase (Autonomous Software Experiments on Hera)**. Developed for execution on the spacecraft's second processor core (Core 1), the system operates within a protected sandbox environment alongside flight-critical systems, achieving **Technology Readiness Level 4 (TRL 4)** validation.
+AURA is engineered specifically within the [**ESA OSIP**](https://www.esa.int/Enabling_Support/Preparing_for_the_Future/Discovery_and_Preparation/The_Open_Space_Innovation_Platform_OSIP) framework as a direct software solution to meet the core objectives of the **Hera Extended Mission Phase (Autonomous Software Experiments on Hera)**. Developed for execution on the spacecraft's second processor core (Core 1), the system operates within a protected sandbox environment alongside flight-critical systems, achieving **Technology Readiness Level 4 (TRL 4)** validation.
 
 [![TRL](https://img.shields.io/badge/TRL-4-blue.svg)](https://github.com/techn0man1ac/AURA/tree/main#-deployment--execution-procedure)
 [![Architecture](https://img.shields.io/badge/Target-LEON3%20%2F%20SPARC%20V8-informational.svg)](https://github.com/techn0man1ac/AURA/tree/main#-technical-architecture--core-constraints)
