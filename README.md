@@ -343,6 +343,8 @@ AURA is an independent research / engineering prototype. References to ESA, Hera
 
 The TRL 4 designation describes the current maturity of the demonstrated technology and should not be interpreted as flight qualification, mission acceptance, or operational certification.
 
+All research data, interfaces (hera_interface.h), and flight matrices used in this project are processed in strict accordance with the ESA OSIP General Conditions of Participation and OSIP Terms & Conditions, solely for the purpose of the Autonomous Software Experiments on Hera campaign.
+
 ---
 
 ## 📄 License
