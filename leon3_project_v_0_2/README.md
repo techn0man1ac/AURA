@@ -36,25 +36,15 @@ Data serialization circumvents human-readable ASCII or string parsing inside the
 The production-ready workspace contains the following core files:
 *   `Hello_AURA.c` — The standalone core flight software application executing the fixed-point block entropy pipeline.
 *   `experiment_test.elf` — The final 18 MB compiled space-grade executable binary containing embedded image matrices.
-*   `hera_types.h` — Injection type-definition header providing strict compliance mapping for standard integer specifications.
-*   `hera_interface.h` — Official ESA OSIP API interface prototype declarations for the Hera mission payload suite.
-*   `hera_client_stub.c` — The original flight simulation stub managing camera synchronization frames.
-*   `images_data.7z` — The compressed archive containing the main flight data bank header (`images_data.h`). **Must be extracted before compilation.**
 *   `image.bin` — The raw 8-bit monochrome binary matrix extracted for hardware memory direct mapping (`0x40600000`).
 *   `leon3.repl` — The Renode hardware platform description file enforcing the exact 16 MB memory map layout.
 *   `script.resc` — The automation deployment script establishing the socket bindings and CPU clock performance.
 *   `telemetry_live_visualizer.py` — The Ground Segment analytics visualizer decoding binary masks into a real-time heatmap.
-*   `start.S` / `stub_utils.h` — Low-level assembly initialization sequences and printing primitives for the SPARC architecture.
+
 
 ---
 
 ## Deployment & Execution Procedure
-
-### Step 0: Extract the Flight Data Bank
-Before initiating the compilation pipeline, you must extract the compressed flight data bank header containing the integrated 404-frame optical matrices:
-1. Locate the `images_data.7z` archive in the project root directory.
-2. Extract the file using 7-Zip or any compatible decompression utility.
-3. Ensure that the resulting file **`images_data.h`** is placed directly in the project root directory alongside `Hello_AURA.c`.
 
 ### Step 1: Toolchain Cross-Compilation
 To recompile the flight software from source using the official Aeroflex Gaisler BCC2 cross-compiler toolchain, execute the following multi-stage compilation pipeline within a Windows PowerShell terminal:
@@ -64,16 +54,23 @@ To recompile the flight software from source using the official Aeroflex Gaisler
 & "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g Hello_AURA.c -o experiment_test.elf "-Wl,-Ttext=0x40000000" "-Wl,-z,muldefs" -lgcc
 ```
 
-### Step 2: Initialize the Ground Segment Visualizer
-Open a separate terminal window and launch the telemetry live decoder to listen for incoming binary flows from the spacecraft:
-```powershell
-python telemetry_live_visualizer.py
-```
 
-### Step 3: Launch the Spacecraft Emulation Framework
+### Step 2: Launch the Spacecraft Emulation Framework
+
 In the primary command terminal, initiate the software-in-the-loop validation inside the Renode environment:
 ```powershell
 renode script.resc
 ```
 
+![AURA LEON3 Remode Emulations](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/LEON3_Remode_Emulations.png)
+
+### Step 3: Initialize the Ground Segment Visualizer
+
+Open a separate terminal window and launch the telemetry live decoder to listen for incoming binary flows from the spacecraft:
+```powershell
+python telemetry_live_visualizer.py
+```
+
 Once execution commences, the onboard application will process the locked 1020x1020 image grid. The telemetry stream will route dynamically over the host interface loopback (`127.0.0.1:12345`), rendering a live, interactive mathematical heatmap of the asteroid terrain in the Ground Segment visualizer window.
+
+![AURA simple visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/leon3_project_v_0_2/Figure_1.png)
