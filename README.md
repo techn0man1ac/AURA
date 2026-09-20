@@ -40,7 +40,7 @@ To comply with strict aerospace software engineering standards (ECSS Category D)
 * **Hardware Architecture:** 32-bit SPARC V8 (**LEON3**) processor core executing at a flight-representative **250 MIPS** (Tested on GR712RC Dual-Core configuration).
 * **Memory Restrictions:** Strict **16 MB RAM** static partition sandbox. Dynamic memory allocation (`malloc`, `free`) is entirely omitted to enforce execution determinism.
 * **Sensor Interfacing & Data Source:** Interfaced with a simulated **Hera AFC** navigation camera utilizing a monochrome *FaintStar2* sensor configuration: **1020x1020 pixels, strict 8-bit Grayscale** (1 byte per pixel, total raw frame size: 1,040,400 bytes). 
-  * *Note on Visual Assets:* All raw flight matrices (`image.bin` and `images_data.7z`) are extracted directly from the **official ESA Hera dataset (`AFC images.tar.gz`)** provided via the [OSIP campaign platform](https://ideas.esa.int/core/servlet/hype/IMT?userAction=Browse&templateName=&documentId=76590fb19b5e6424d8862a329c2884b1).
+  * *Note on Visual Assets:* All raw flight matrices (`image.bin`) are extracted directly from the **official ESA Hera dataset (`AFC images.tar.gz`)** provided via the [OSIP campaign platform](https://ideas.esa.int/core/servlet/hype/IMT?userAction=Browse&templateName=&documentId=76590fb19b5e6424d8862a329c2884b1).
 * **Zero Floating-Point Unit (FPU) Overhead:** Fixed-point integer mathematical models completely replace standard floating-point functions (`float`, `double`, `log2f`). Logarithmic probabilities are resolved using ultra-fast bitwise arithmetic.
 * **Histogram Footprint Optimization:** Features a dedicated tracking stack that enables precise, point-by-point clearing of modified memory indexes. This bounds clearing operations to $O(N)$ efficiency (where $N$ is the count of active grayscale channels per block), maintaining internal CPU cache efficiency.
 
@@ -63,15 +63,10 @@ Data serialization circumvents human-readable ASCII or string parsing inside the
 ## 📂 V0.2 Repository Structure (work variant)
 * `Hello_AURA.c` — The standalone core flight software application executing the fixed-point block entropy pipeline.
 * `experiment_test.elf` — The final compiled space-grade executable binary containing embedded image matrices.
-* `hera_types.h` — Injection type-definition header providing strict compliance mapping for standard integer specifications.
-* `hera_interface.h` — Official ESA OSIP API interface prototype declarations for the Hera mission payload suite.
-* `hera_client_stub.c` — The original flight simulation stub managing camera synchronization frames.
-* `images_data.7z` — The compressed archive containing the main flight data bank header (`images_data.h`).
 * `image.bin` — The raw 8-bit monochrome binary matrix extracted for hardware memory direct mapping (`0x40600000`). **Sourced from ESA's official `AFC images.tar.gz` dataset.**
 * `leon3.repl` — The Renode hardware platform description file enforcing the exact 16 MB memory map layout.
 * `script.resc` — The automation deployment script establishing the socket bindings and CPU clock performance.
 * `telemetry_live_visualizer.py` — The Ground Segment analytics visualizer decoding binary masks into a real-time heatmap.
-* `start.S` / `stub_utils.h` — Low-level assembly initialization sequences and printing primitives for the SPARC architecture.
 
 ---
 
@@ -102,28 +97,12 @@ renode --version
 **Recommended Project Workspace Path:** `C:\Projects\AURA-main\`  
 *All command line steps below assume that your terminal is opened and executing from the project root directory (`cd C:\Projects\AURA-main\`).*
 
-### Step 0: Extract the Flight Data Bank
-Before initiating the compilation pipeline, you must extract the compressed flight data bank header containing the integrated 404-frame optical matrices:
-1. Locate the `images_data.7z` archive inside `C:\Projects\AURA-main\`.
-2. Extract the file using 7-Zip or any compatible decompression utility (This archive contains the `images_data.h` matrix file generated from the [Official ESA AFC Images Dataset](https://ideas.esa.int/core/servlet/hype/IMT?userAction=Browse&templateName=&documentId=76590fb19b5e6424d8862a329c2884b1)).
-3. Ensure that the resulting file **`images_data.h`** is placed directly in the `C:\Projects\AURA-main\` directory alongside `Hello_AURA.c`.
-
 ### Step 1: Toolchain Cross-Compilation
 To recompile the flight software from source using the official Aeroflex Gaisler BCC2 cross-compiler toolchain, execute the following multi-stage compilation pipeline within a Windows PowerShell terminal opened at **`C:\Projects\AURA-main\`**:
 
 ```powershell
-# 1. Compile the flight application layer into an object file
-& "C:\Projects\bcc-2.2.3-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g -include hera_types.h -c .\Hello_AURA.c -o .\Hello_AURA.o
-```
-
-```powershell
-# 2. Compile the mission simulation stub layer into an object file
-& "C:\Projects\bcc-2.2.3-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g -include hera_types.h -c .\hera_client_stub.c -o .\hera_client_stub.o
-```
-
-```powershell
-# 3. Link objects into the final aerospace ELF image aligned at target memory space
-& "C:\Projects\bcc-2.2.3-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" .\Hello_AURA.o .\hera_client_stub.o -o .\experiment_test.elf "-Wl,-Ttext=0x40000000" "-Wl,-z,muldefs" -lgcc
+# Compiling and linking the standalone AURA firmware directly into an ELF image with memory alignment
+& "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g Hello_AURA.c -o experiment_test.elf "-Wl,-Ttext=0x40000000" "-Wl,-z,muldefs" -lgcc
 ```
 
 ### Step 2: Launch the Spacecraft Emulation Framework
@@ -137,6 +116,7 @@ renode .\script.resc
 
 ### Step 3: Initialize the Ground Segment Visualizer
 Once the emulation starts running and the virtual spacecraft begins processing frames, open a separate terminal window at **`C:\Projects\AURA-main\`** and launch the telemetry live decoder to bind to the active stream:
+
 ```powershell
 python .\telemetry_live_visualizer.py
 ```
