@@ -60,14 +60,8 @@ Before initiating the compilation pipeline, you must extract the compressed flig
 To recompile the flight software from source using the official Aeroflex Gaisler BCC2 cross-compiler toolchain, execute the following multi-stage compilation pipeline within a Windows PowerShell terminal:
 
 ```powershell
-# 1. Compile the flight application layer into an object file
-& "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g -include hera_types.h -c Hello_AURA.c -o Hello_AURA.o
-
-# 2. Compile the mission simulation stub layer into an object file
-& "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g -include hera_types.h -c hera_client_stub.c -o hera_client_stub.o
-
-# 3. Link objects into the final aerospace ELF image aligned at target memory space
-& "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" Hello_AURA.o hera_client_stub.o -o experiment_test.elf "-Wl,-Ttext=0x40000000" "-Wl,-z,muldefs" -lgcc
+# Compiling and linking the standalone AURA firmware directly into an ELF image with memory alignment
+& "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g Hello_AURA.c -o experiment_test.elf "-Wl,-Ttext=0x40000000" "-Wl,-z,muldefs" -lgcc
 ```
 
 ### Step 2: Initialize the Ground Segment Visualizer
