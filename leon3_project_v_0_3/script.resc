@@ -1,0 +1,18 @@
+using sysbus
+mach create "leon3-space-sandbox"
+machine LoadPlatformDescription @leon3.repl
+
+# 1. Завантажуємо портований баре-метал ELF-код AURA
+sysbus LoadELF @experiment_test.elf
+
+# 2. АДАПТАЦІЯ ПІД ЛІМІТ 16 МБ: Завантажуємо сиру Grayscale матрицю 1020x1020 в межах RAM-окруження
+sysbus LoadBinary @image.bin 0x40600000
+
+# 3. Встановлюємо реальну апаратну продуктивність ядра LEON3 супутника Hera (250 MIPS)
+sysbus.cpu PerformanceInMips 250
+
+# 4. Налаштовуємо швидкісний серверний сокет-термінал для фонових задач
+emulation CreateServerSocketTerminal 12345 "external_uart" true
+connector Connect sysbus.uart external_uart
+
+start
