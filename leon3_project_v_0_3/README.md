@@ -1,5 +1,7 @@
 # AURA: Autonomous Unsupervised Feature-Tracking for Real-Time Deep-Space Navigation
 
+![AURA Ground Station](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/develop/leon3_project_v_0_3/AURA_GrndSeg_Screenshot.png)
+
 ## Project Overview
 **AURA** is an experimental on-board flight software pipeline designed for real-time, resource-constrained edge computing during deep-space small-body rendezvous operations. The primary objective of the architecture is to process high-resolution optical matrices locally, compute statistical data density patterns, and isolate high-entropy regions of interest (ROI) to facilitate autonomous proximity operations without saturated communication downlinks.
 
@@ -44,7 +46,6 @@ The production-ready V0.3 workspace contains the following core files:
 *   `Hello_AURA.c` — Independent, standalone core flight software application executing the bare-metal fixed-point telemetry pipeline.
 *   `experiment_test.elf` — The final compiled space-grade executable binary containing embedded image matrices.
 *   `image.bin` — The raw 8-bit monochrome binary matrix extracted for hardware memory direct mapping (`0x40600000`).
-*   `start.S` — Low-level assembly initialization sequences (bootloader) managing stack pointers (`%sp`) and window invalid masks (`%wim`) for the SPARC architecture.
 *   `leon3.repl` / `script.resc` — Renode platform description and automation deployment scripts establishing loopback socket bindings.
 *   `AuraGroundUI.py` — The Ground Segment interactive multi-channel visualizer decoding binary flows into a synchronized real-time multi-display dashboard.
 *   `logs/aura_telemetry_log.csv` — Automated mission logger tracking byte volumes, bandwidth savings, and compression factors dynamically.
