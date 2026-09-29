@@ -3,49 +3,76 @@ import socket
 import struct
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 import numpy as np
 import matplotlib
-matplotlib.use("TkAgg")
+try:
+    matplotlib.use("TkAgg")
+except ImportError:
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 HOST = "127.0.0.1"
 PORT = 12345
 IMG_WIDTH = 1020
 IMG_HEIGHT = 1020
 RAW_IMAGE_BYTES = IMG_WIDTH * IMG_HEIGHT
+CAMERA_EXTENT = (0, IMG_WIDTH, IMG_HEIGHT, 0)
+
+# The firmware uses this fixed L4 block size for progressive full-frame transfer.
+L4_BLOCK_SIZE = 16
+L4_REDRAW_EVERY = 8
+L3_REDRAW_EVERY = 8
+L2_REDRAW_EVERY = 32
 
 MODE_COMMANDS = {
-    "cloud": b"AURA CLOUD\n",
-    "entropy": b"AURA ENTROPY\n",
-    "cut": b"AURA CUT\n",
-    "full": b"AURA FULL\n",
+    "l0": b"AURA L0\n",
+    "l1": b"AURA L1\n",
+    "l2": b"AURA L2\n",
+    "l3": b"AURA L3\n",
+    "l4": b"AURA L4\n",
 }
 
 MODE_NAMES = {
-    "cloud": "Landmark Cloud",
-    "entropy": "Entropy Map",
-    "cut": "Zero-Low-Entropy Cut Image",
-    "full": "Full Raw Image",
+    "l0": "L0 — Top-100 Landmark Cloud + Score",
+    "l1": "L1 — Top-1000 Landmark Map (X,Y only)",
+    "l2": "L2 — Full Adaptive Entropy Map",
+    "l3": "L3 — Sparse ROI Image",
+    "l4": "L4 — Full Image / Block Stream",
 }
 
 MARKER_ACK = 0xAC
-MARKER_CLOUD_HEADER = 0x5B
-MARKER_CLOUD_POINT = 0xBD
-MARKER_ENTROPY_HEADER = 0x5A
-MARKER_ENTROPY_BLOCK = 0xA5
+MARKER_L0_HEADER = 0x5B
+MARKER_L0_POINT = 0xBD
+MARKER_L1_HEADER = 0xB1
+MARKER_L2_HEADER = 0xD0
+MARKER_L2_ENTROPY = 0xD1
+MARKER_L2_COUNT = 0xD2
+MARKER_L3_HEADER = 0xD3
+MARKER_L3_META = 0xD4
+MARKER_L3_BLOCK = 0xD5
+MARKER_L3_COUNT = 0xD6
 MARKER_FULL_HEADER = 0xC0
-MARKER_CUT_HEADER = 0xC1
-MARKER_CUT_META = 0xC2
+MARKER_FULL_BLOCK = 0xC3
 MARKER_END = 0xFE
+
+ACK_NAMES = {
+    10: "L0 TOP-100",
+    11: "L1 TOP-1000 (X,Y)",
+    12: "L2 FULL ENTROPY",
+    13: "L3 SPARSE ROI",
+    14: "L4 FULL FRAME STREAM",
+}
+
 
 class AuraGroundUI:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AURA — Ground Segment / Interactive Telemetry Console")
-        self.root.geometry("1250x900")
+        self.root.title("AURA V0.3 — Ground Segment / Interactive Telemetry Console")
+        self.root.geometry("1280x1280")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.sock = None
@@ -53,33 +80,67 @@ class AuraGroundUI:
         self.receiver_thread = None
         self.stop_event = threading.Event()
         self.events = queue.Queue()
-        self.busy = False
-        self.connected = False
 
+        self.connected = False
+        self.busy = False
         self.current_mode = None
-        self.current_frame = None
+
+        # Cloud state.
         self.cloud_x = []
         self.cloud_y = []
         self.cloud_score = []
+        self.cloud_requested = 0
+        self.cloud_step = 0
+        self.cloud_threshold = 0
+        self.cloud_is_scored = True
+
+        # L1 packed point stream state.
+        self.l1_expected_points = 0
+        self.l1_expected_bytes = 0
+        self.l1_point_buffer = bytearray()
+
+        # L2 full entropy map state.
         self.heatmap = None
         self.heatmap_rows = 0
         self.heatmap_cols = 0
         self.block_size = 0
-        self.cut_threshold = None
-        
-        # Потоковий локальний облік телеметричних байт
-        self.rx_bytes_total = 0
-        self.frame_started_bytes = 0
-        
+        self.heatmap_block_count = 0
+        self.heatmap_expected_blocks = 0
+
+        # L3/L4 image reconstruction state.
+        self.roi_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
+        self.l4_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
+        self.roi_block_size = 0
+        self.roi_cols = 0
+        self.roi_rows = 0
+        self.roi_threshold = None
+        self.roi_expected_blocks = 0
+        self.roi_received_blocks = 0
+        self.l4_block_size = 0
+        self.l4_cols = 0
+        self.l4_rows = 0
+        self.l4_expected_blocks = 0
+        self.l4_received_blocks = 0
+
+        # Exact raw block receive state.
         self.raw_expected = 0
         self.raw_buffer = bytearray()
+        self.raw_block_col = 0
+        self.raw_block_row = 0
+        self.raw_block_w = 0
+        self.raw_block_h = 0
+        self.raw_block_mode = None
+
         self.parser_buffer = bytearray()
         self.parser_state = "packet"
-        self.points_since_draw = 0
-        self.blocks_since_draw = 0
-        
-        # Об'єкт колірної шкали для запобігання бага нашарування
+
+        self.rx_bytes_total = 0
+        self.frame_started_bytes = 0
+
+        # Matplotlib artists. Created once per mode and then updated in-place.
         self.cbar = None
+        self.cloud_scatter = None
+        self.im_data = None
 
         self._build_ui()
         self._configure_styles()
@@ -88,43 +149,44 @@ class AuraGroundUI:
 
     def _configure_styles(self):
         self.style = ttk.Style()
-        self.style.configure("Connect.TButton", foreground="white", background="#28a745", font=("Helvetica", 10, "bold"))
-        self.style.configure("Disconnect.TButton", foreground="white", background="#dc3545", font=("Helvetica", 10, "bold"))
+        self.style.configure("Connect.TButton", font=("Helvetica", 10, "bold"))
+        self.style.configure("Disconnect.TButton", font=("Helvetica", 10, "bold"))
+
     def _build_ui(self):
         top = ttk.Frame(self.root, padding=10)
         top.pack(fill="x")
 
         ttk.Label(
             top,
-            text="AURA Ground Segment Console",
+            text="AURA Ground Segment Console V0.3",
             font=("Helvetica", 16, "bold"),
         ).pack(side="left", padx=(0, 18))
 
         self.status_var = tk.StringVar(value="Initializing connection to Renode LEON3 core...")
         ttk.Label(top, textvariable=self.status_var, font=("Helvetica", 10, "italic")).pack(side="left")
 
-        # Interactive connection status controller
-        self.connect_button = ttk.Button(top, text="Connect", command=self.toggle_connection, style="Connect.TButton")
+        self.connect_button = ttk.Button(
+            top,
+            text="Connect",
+            command=self.toggle_connection,
+            style="Connect.TButton",
+        )
         self.connect_button.pack(side="right")
 
-        controls = ttk.LabelFrame(self.root, text="Telemetry Request Panel", padding=10)
+        controls = ttk.LabelFrame(self.root, text="Interactive Telemetry Request Panel", padding=10)
         controls.pack(fill="x", padx=10, pady=(0, 10))
 
         self.buttons = {}
         button_specs = [
-            ("cloud", "☁ Landmark Cloud"),
-            ("entropy", "▦ Entropy Heatmap"),
-            ("cut", "✂ Cut Image (Gated)"),
-            ("full", "▣ Full Raw Frame"),
+            ("l0", "L0 — Top-100 + score"),
+            ("l1", "L1 — Top-1000 X/Y"),
+            ("l2", "L2 — Full entropy"),
+            ("l3", "L3 — ROI blocks"),
+            ("l4", "L4 — Full block stream"),
         ]
-
         for mode, label in button_specs:
-            btn = ttk.Button(
-                controls,
-                text=label,
-                command=lambda m=mode: self.request_mode(m),
-            )
-            btn.pack(side="left", padx=5, fill="x", expand=True)
+            btn = ttk.Button(controls, text=label, command=lambda m=mode: self.request_mode(m))
+            btn.pack(side="left", padx=4, fill="x", expand=True)
             self.buttons[mode] = btn
 
         self.info_var = tk.StringVar(value="System Idle. Awaiting connection.")
@@ -133,67 +195,83 @@ class AuraGroundUI:
             textvariable=self.info_var,
             anchor="w",
             font=("Courier New", 10, "bold"),
-            foreground="#0056b3",
             padding=(10, 0, 10, 8),
         ).pack(fill="x")
 
         fig_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         fig_frame.pack(fill="both", expand=True)
 
-        # Стабільна архітектура: Створюємо фігуру один раз
-        self.fig = plt.figure(figsize=(8, 7))
+        self.fig = plt.figure(figsize=(9, 7))
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=fig_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self._draw_empty()
 
-    def _draw_empty(self):
-        self.ax.clear()
-        # Замість cbar.remove() безпечно очищаємо фігуру через повне видалення додаткових осей колірних шкал
-        for ax in self.fig.axes[:]:
-            if ax != self.ax:
-                self.fig.delaxes(ax)
-        self.cbar = None
-        self.ax.set_title("AURA Downlink — Select Telemetry Mode")
+    def _remove_colorbar(self):
+        if self.cbar is not None:
+            try:
+                self.cbar.remove()
+            except Exception:
+                pass
+            self.cbar = None
+
+    def _clear_extra_axes(self):
+        self._remove_colorbar()
+        for extra_ax in self.fig.axes[:]:
+            if extra_ax is not self.ax:
+                self.fig.delaxes(extra_ax)
+        self.im_data = None
+
+    def _fix_camera_axes(self, title, xlabel="Pixel X", ylabel="Pixel Y"):
         self.ax.set_xlim(0, IMG_WIDTH)
         self.ax.set_ylim(IMG_HEIGHT, 0)
-        self.ax.set_xlabel("Spacecraft Frame X")
-        self.ax.set_ylabel("Spacecraft Frame Y")
+        self.ax.set_xlabel(xlabel)
+        self.ax.set_ylabel(ylabel)
+        self.ax.set_aspect("equal", adjustable="box")
+        self.ax.set_title(title)
+
+    def _draw_empty(self):
+        self.ax.clear()
+        self._clear_extra_axes()
+        self.cloud_scatter = None
+        self._fix_camera_axes("AURA V0.3 — Select Telemetry Level")
         self.canvas.draw_idle()
 
     def set_buttons_state(self, enabled: bool):
-        state = "normal" if enabled and self.connected else "disabled"
+        state = "normal" if enabled and self.connected and not self.busy else "disabled"
         for btn in self.buttons.values():
             btn.configure(state=state)
 
     def toggle_connection(self):
         if self.connected:
             self.stop_event.set()
-            if self.sock:
-                try:
-                    self.sock.close()
-                except OSError:
-                    pass
+            with self.sock_lock:
+                if self.sock:
+                    try:
+                        self.sock.close()
+                    except OSError:
+                        pass
             self.events.put(("disconnected", None))
-        else:
-            self.status_var.set(f"Connecting to LEON3 target at {HOST}:{PORT}...")
-            self.connect_button.configure(state="disabled")
+            return
 
-            def worker():
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-                    sock.connect((HOST, PORT))
-                    self.events.put(("connected", sock))
-                    self._recv_loop(sock)
-                except ConnectionRefusedError:
-                    self.events.put(("error", f"Connection refused. Ensure Renode script.resc is executing."))
-                except OSError as exc:
-                    self.events.put(("error", f"Socket transport error: {exc}"))
+        self.status_var.set(f"Connecting to LEON3 target at {HOST}:{PORT}...")
+        self.connect_button.configure(state="disabled")
 
-            self.stop_event.clear()
-            self.receiver_thread = threading.Thread(target=worker, daemon=True)
-            self.receiver_thread.start()
+        def worker():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+                sock.connect((HOST, PORT))
+                self.events.put(("connected", sock))
+                self._recv_loop(sock)
+            except ConnectionRefusedError:
+                self.events.put(("error", "Connection refused. Start Renode script.resc first."))
+            except OSError as exc:
+                self.events.put(("error", f"Socket transport error: {exc}"))
+
+        self.stop_event.clear()
+        self.receiver_thread = threading.Thread(target=worker, daemon=True)
+        self.receiver_thread.start()
 
     def _recv_loop(self, sock):
         while not self.stop_event.is_set():
@@ -202,43 +280,82 @@ class AuraGroundUI:
                 if not chunk:
                     break
                 self.parser_buffer.extend(chunk)
-                self.rx_bytes_total += len(chunk)  # Точний локальний лічильник байт у додатку
-                self._parse_buffer(sock)
+                self.rx_bytes_total += len(chunk)
+                self._parse_buffer()
             except OSError:
                 break
         self.events.put(("disconnected", None))
 
-    def _parse_buffer(self, sock):
+    @staticmethod
+    def _block_shape(block_size: int, col: int, row: int):
+        x0 = col * block_size
+        y0 = row * block_size
+        bw = min(block_size, IMG_WIDTH - x0)
+        bh = min(block_size, IMG_HEIGHT - y0)
+        return x0, y0, bw, bh
+
+    def _decode_l1_points(self, payload: bytes, count: int):
+        self.cloud_x = []
+        self.cloud_y = []
+        self.cloud_score = [0] * count
+        for i in range(count):
+            base = i * 3
+            b0 = payload[base]
+            b1 = payload[base + 1]
+            b2 = payload[base + 2]
+            x = (b0 << 2) | (b1 >> 6)
+            y = ((b1 & 0x3F) << 4) | (b2 >> 4)
+            self.cloud_x.append(x)
+            self.cloud_y.append(y)
+
+    def _parse_buffer(self):
         while True:
-            if self.parser_state == "raw":
+            # Raw payload modes are length-delimited and consume bytes without
+            # interpreting protocol markers inside the image data.
+            if self.parser_state in ("l1_points", "image_block"):
                 if self.raw_expected <= 0:
                     self.parser_state = "packet"
                     continue
 
                 take = min(len(self.parser_buffer), self.raw_expected - len(self.raw_buffer))
-                if take == 0:
+                if take <= 0:
                     return
 
                 self.raw_buffer.extend(self.parser_buffer[:take])
                 del self.parser_buffer[:take]
 
-                if len(self.raw_buffer) == self.raw_expected:
-                    image = np.frombuffer(self.raw_buffer, dtype=np.uint8).copy()
-                    if image.size == RAW_IMAGE_BYTES:
-                        self.current_frame = image.reshape((IMG_HEIGHT, IMG_WIDTH))
-                        mode = self.current_mode or "full"
-                        self.events.put(("raw_complete", (mode, self.current_frame.copy())))
-                    self.raw_expected = 0
-                    self.raw_buffer.clear()
-                    self.parser_state = "packet"
-                    continue
-                return
+                if len(self.raw_buffer) != self.raw_expected:
+                    return
+
+                payload = bytes(self.raw_buffer)
+                if self.parser_state == "l1_points":
+                    if len(payload) == self.l1_expected_bytes:
+                        self._decode_l1_points(payload, self.l1_expected_points)
+                        self.events.put(("l1_points_complete", None))
+                else:
+                    block = np.frombuffer(payload, dtype=np.uint8).copy().reshape(
+                        (self.raw_block_h, self.raw_block_w)
+                    )
+                    self.events.put((
+                        "image_block_complete",
+                        (
+                            self.raw_block_mode,
+                            self.raw_block_col,
+                            self.raw_block_row,
+                            block,
+                        ),
+                    ))
+
+                self.raw_expected = 0
+                self.raw_buffer.clear()
+                self.parser_state = "packet"
+                continue
 
             if len(self.parser_buffer) < 4:
                 return
 
-            raw = struct.unpack(">I", self.parser_buffer[:4])[0]
-            marker = (raw >> 24) & 0xFF
+            word = struct.unpack(">I", self.parser_buffer[:4])[0]
+            marker = (word >> 24) & 0xFF
 
             if marker == MARKER_END:
                 del self.parser_buffer[:4]
@@ -247,198 +364,363 @@ class AuraGroundUI:
 
             if marker == MARKER_ACK:
                 del self.parser_buffer[:4]
-                mode_id = raw & 0xFF
-                self.events.put(("ack", mode_id))
+                self.events.put(("ack", word & 0xFF))
                 continue
 
-            if marker == MARKER_CLOUD_HEADER:
+            if marker == MARKER_L0_HEADER:
                 del self.parser_buffer[:4]
-                max_landmarks = (raw >> 12) & 0x0FFF
-                step = (raw >> 8) & 0x0F
-                threshold = raw & 0xFF
-                self.current_mode = "cloud"
+                count = (word >> 12) & 0x0FFF
+                step = (word >> 8) & 0x0F
+                threshold = word & 0xFF
+                self.current_mode = "l0"
+                self.cloud_requested = count
+                self.cloud_step = step
+                self.cloud_threshold = threshold
+                self.cloud_is_scored = True
                 self.cloud_x = []
                 self.cloud_y = []
                 self.cloud_score = []
-                self.events.put(("cloud_header", (max_landmarks, step, threshold)))
+                self.events.put(("cloud_header", ("l0", count, step, threshold)))
                 continue
 
-            if marker == MARKER_CLOUD_POINT:
+            if marker == MARKER_L0_POINT:
                 del self.parser_buffer[:4]
-                x = (raw >> 14) & 0x03FF
-                y = (raw >> 4) & 0x03FF
-                score = raw & 0x0F
+                x = (word >> 14) & 0x03FF
+                y = (word >> 4) & 0x03FF
+                score = word & 0x0F
                 self.cloud_x.append(x)
                 self.cloud_y.append(y)
                 self.cloud_score.append(score)
-                
-                # МИТТЄВИЙ АПДЕЙТ: Відправляємо кожну точку в реальному часі без очікування
-                self.events.put((
-                    "cloud_update",
-                    (list(self.cloud_x), list(self.cloud_y), list(self.cloud_score)),
-                ))
+                if len(self.cloud_x) % 16 == 0:
+                    self.events.put(("cloud_update", None))
                 continue
 
-            if marker == MARKER_ENTROPY_HEADER:
+            if marker == MARKER_L1_HEADER:
                 del self.parser_buffer[:4]
-                cols = (raw >> 16) & 0xFF
-                rows = (raw >> 8) & 0xFF
-                block = raw & 0xFF
-                self.current_mode = "entropy"
+                count = (word >> 12) & 0x0FFF
+                step = (word >> 8) & 0x0F
+                threshold = word & 0xFF
+                self.current_mode = "l1"
+                self.cloud_requested = count
+                self.cloud_step = step
+                self.cloud_threshold = threshold
+                self.cloud_is_scored = False
+                self.l1_expected_points = count
+                self.l1_expected_bytes = count * 3
+                self.l1_point_buffer.clear()
+                self.cloud_x = []
+                self.cloud_y = []
+                self.cloud_score = []
+                if self.l1_expected_bytes == 0:
+                    self.events.put(("l1_points_complete", None))
+                else:
+                    self.raw_expected = self.l1_expected_bytes
+                    self.parser_state = "l1_points"
+                self.events.put(("l1_header", (count, step, threshold)))
+                continue
+
+            if marker == MARKER_L2_HEADER:
+                del self.parser_buffer[:4]
+                block = (word >> 16) & 0xFF
+                cols = (word >> 8) & 0xFF
+                rows = word & 0xFF
+                self.current_mode = "l2"
+                self.block_size = block
                 self.heatmap_cols = cols
                 self.heatmap_rows = rows
-                self.block_size = block
                 self.heatmap = np.zeros((rows, cols), dtype=np.float32)
-                self.events.put(("entropy_header", (rows, cols, block)))
+                self.heatmap_block_count = 0
+                self.heatmap_expected_blocks = 0
+                self.events.put(("l2_header", (rows, cols, block)))
                 continue
 
-            if marker == MARKER_ENTROPY_BLOCK:
+            if marker == MARKER_L2_ENTROPY:
                 del self.parser_buffer[:4]
-                col = (raw >> 17) & 0x7F
-                row = (raw >> 10) & 0x7F
-                entropy = (raw & 0x3FF) * 0.01
+                col = (word >> 16) & 0xFF
+                row = (word >> 8) & 0xFF
+                entropy = (word & 0xFF) * 0.1
                 if self.heatmap is not None and row < self.heatmap_rows and col < self.heatmap_cols:
                     self.heatmap[row, col] = entropy
-                    
-                    # МИТТЄВИЙ АПДЕЙТ: Візуалізуємо кожен завантажений блок одразу
-                    self.events.put(("entropy_update", self.heatmap.copy()))
+                    self.heatmap_block_count += 1
+                    if self.heatmap_block_count % L2_REDRAW_EVERY == 0:
+                        self.events.put(("l2_update", None))
                 continue
 
-            if marker == MARKER_FULL_HEADER or marker == MARKER_CUT_HEADER:
+            if marker == MARKER_L2_COUNT:
                 del self.parser_buffer[:4]
-                self.current_mode = "full" if marker == MARKER_FULL_HEADER else "cut"
-                self.raw_expected = raw & 0x00FFFFFF
-                self.raw_buffer = bytearray()
-                self.parser_state = "raw"
-                self.events.put(("raw_header", (self.current_mode, self.raw_expected)))
+                self.heatmap_expected_blocks = word & 0xFFFF
+                self.events.put(("l2_count", self.heatmap_expected_blocks))
                 continue
 
-            if marker == MARKER_CUT_META:
+            if marker == MARKER_L3_HEADER:
                 del self.parser_buffer[:4]
-                block = (raw >> 16) & 0xFF
-                threshold = raw & 0xFFFF
-                self.block_size = block
-                self.cut_threshold = threshold * 0.01
-                self.events.put(("cut_meta", (block, self.cut_threshold)))
+                block = (word >> 16) & 0xFF
+                cols = (word >> 8) & 0xFF
+                rows = word & 0xFF
+                self.current_mode = "l3"
+                self.roi_block_size = block
+                self.roi_cols = cols
+                self.roi_rows = rows
+                self.roi_frame.fill(0)
+                self.roi_expected_blocks = 0
+                self.roi_received_blocks = 0
+                self.events.put(("l3_header", (rows, cols, block)))
                 continue
 
+            if marker == MARKER_L3_META:
+                del self.parser_buffer[:4]
+                self.roi_threshold = (word & 0xFFFF) * 0.01
+                self.events.put(("l3_meta", self.roi_threshold))
+                continue
+
+            if marker == MARKER_L3_COUNT:
+                del self.parser_buffer[:4]
+                self.roi_expected_blocks = word & 0xFFFF
+                self.events.put(("l3_count", self.roi_expected_blocks))
+                continue
+
+            if marker == MARKER_L3_BLOCK:
+                del self.parser_buffer[:4]
+                col = (word >> 16) & 0xFF
+                row = (word >> 8) & 0xFF
+                if self.roi_block_size <= 0 or col >= self.roi_cols or row >= self.roi_rows:
+                    continue
+                x0, y0, bw, bh = self._block_shape(self.roi_block_size, col, row)
+                if bw <= 0 or bh <= 0:
+                    continue
+                self.raw_block_mode = "l3"
+                self.raw_block_col = col
+                self.raw_block_row = row
+                self.raw_block_w = bw
+                self.raw_block_h = bh
+                self.raw_expected = bw * bh
+                self.raw_buffer.clear()
+                self.parser_state = "image_block"
+                continue
+
+            if marker == MARKER_FULL_HEADER:
+                del self.parser_buffer[:4]
+                block = (word >> 16) & 0xFF
+                cols = (word >> 8) & 0xFF
+                rows = word & 0xFF
+                self.current_mode = "l4"
+                self.l4_block_size = block
+                self.l4_cols = cols
+                self.l4_rows = rows
+                self.l4_expected_blocks = rows * cols
+                self.l4_received_blocks = 0
+                self.l4_frame.fill(0)
+                self.events.put(("l4_header", (block, cols, rows)))
+                continue
+
+            if marker == MARKER_FULL_BLOCK:
+                del self.parser_buffer[:4]
+                col = (word >> 16) & 0xFF
+                row = (word >> 8) & 0xFF
+                if self.l4_block_size <= 0 or col >= self.l4_cols or row >= self.l4_rows:
+                    continue
+                x0, y0, bw, bh = self._block_shape(self.l4_block_size, col, row)
+                if bw <= 0 or bh <= 0:
+                    continue
+                self.raw_block_mode = "l4"
+                self.raw_block_col = col
+                self.raw_block_row = row
+                self.raw_block_w = bw
+                self.raw_block_h = bh
+                self.raw_expected = bw * bh
+                self.raw_buffer.clear()
+                self.parser_state = "image_block"
+                continue
+
+            # Resynchronize against stray ASCII startup text or unknown bytes.
             del self.parser_buffer[0]
 
     def request_mode(self, mode: str):
         if not self.connected or self.busy:
             return
 
-        command = MODE_COMMANDS[mode]
         with self.sock_lock:
             try:
-                self.sock.sendall(command)
+                self.sock.sendall(MODE_COMMANDS[mode])
             except OSError as exc:
                 self.status_var.set(f"Tx Error: {exc}")
                 return
 
         self.busy = True
         self.current_mode = mode
+        self.frame_started_bytes = self.rx_bytes_total
         self.current_frame = None
+
         self.cloud_x = []
         self.cloud_y = []
         self.cloud_score = []
+        self.cloud_requested = 0
+        self.cloud_is_scored = mode == "l0"
+
         self.heatmap = None
-        self.cut_threshold = None
+        self.heatmap_rows = 0
+        self.heatmap_cols = 0
+        self.block_size = 0
+        self.heatmap_block_count = 0
+        self.heatmap_expected_blocks = 0
+
+        self.roi_frame.fill(0)
+        self.l4_frame.fill(0)
+        self.roi_received_blocks = 0
+        self.roi_expected_blocks = 0
+        self.l4_received_blocks = 0
+        self.l4_expected_blocks = 0
+        self.roi_threshold = None
         self.raw_expected = 0
-        self.raw_buffer = bytearray()
+        self.raw_buffer.clear()
         self.parser_state = "packet"
-        self.points_since_draw = 0
-        self.blocks_since_draw = 0
-        
-        # Точка відліку для локального розрахунку байт кадру
-        self.frame_started_bytes = self.rx_bytes_total
-        
-        self.info_var.set(f"Request Sent: {MODE_NAMES[mode]} ... Awaiting Payload ...")
+        self.raw_block_mode = None
+
+        self._prepare_mode_view(mode)
+        self.info_var.set(f"Request sent: {MODE_NAMES[mode]} — awaiting payload...")
         self.set_buttons_state(False)
+        self.canvas.draw_idle()
 
+    def _prepare_mode_view(self, mode):
         self.ax.clear()
-        # Безпечний скид додаткових осей без використання cbar.remove()
-        for ax in self.fig.axes[:]:
-            if ax != self.ax:
-                self.fig.delaxes(ax)
-        self.cbar = None
+        self._clear_extra_axes()
+        self.cloud_scatter = None
 
-        if mode in ("full", "cut"):
-            self.ax.imshow(np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8), cmap="gray", vmin=0, vmax=255)
-            self.ax.set_xlim(0, IMG_WIDTH)
-            self.ax.set_ylim(IMG_HEIGHT, 0)
-        self.canvas.draw_idle()
-
-    def _render_cloud(self, payload):
-        x, y, score = payload
-        
-        # Очищуємо поле повністю лише при старті (порожній масив), далі просто міняємо точки
-        if not x and not y:
-            self.ax.clear()
-            for ax in self.fig.axes[:]:
-                if ax != self.ax:
-                    self.fig.delaxes(ax)
-            self.cbar = None
-            self.im_entropy = None
+        if mode in ("l0", "l1"):
             self.ax.set_facecolor("#0b0c10")
-            self.ax.set_xlim(0, IMG_WIDTH)
-            self.ax.set_ylim(IMG_HEIGHT, 0)
-            self.ax.set_aspect("equal", adjustable="box")
-            self.ax.set_title("AURA — Landmark Feature Cloud (Streaming...)")
-            self.ax.set_xlabel("Spacecraft Matrix X")
-            self.ax.set_ylabel("Spacecraft Matrix Y")
-            self.cloud_scatter = None
-        
-        if x and y:
-            if hasattr(self, 'cloud_scatter') and self.cloud_scatter is not None:
-                self.cloud_scatter.remove()
-            self.cloud_scatter = self.ax.scatter(x, y, c=score, cmap="plasma", vmin=0, vmax=15, s=15, marker="+")
-            self.ax.set_title(f"AURA — Landmark Feature Cloud ({len(x)} features tracked)")
-            
+            self._fix_camera_axes(MODE_NAMES[mode])
+            return
+
+        if mode == "l2":
+            self.heatmap = None
+            self._fix_camera_axes("AURA — Full Adaptive Entropy Map", "Pixel X", "Pixel Y")
+            return
+
+        if mode == "l3":
+            self._create_image_artist(self.roi_frame, "AURA — Sparse ROI Reconstruction")
+            return
+
+        if mode == "l4":
+            self._create_image_artist(self.l4_frame, "AURA — Full Frame Streaming (top → bottom, left → right)")
+
+    def _create_image_artist(self, image, title):
+        self.im_data = self.ax.imshow(
+            image,
+            cmap="gray",
+            vmin=0,
+            vmax=255,
+            interpolation="nearest",
+            extent=CAMERA_EXTENT,
+            origin="upper",
+            aspect="equal",
+        )
+        self._fix_camera_axes(title)
+
+    def _render_cloud(self):
+        self.ax.clear()
+        self._clear_extra_axes()
+        self.cloud_scatter = None
+        self.ax.set_facecolor("#0b0c10")
+
+        if self.cloud_x:
+            if self.current_mode == "l0":
+                self.cloud_scatter = self.ax.scatter(
+                    self.cloud_x,
+                    self.cloud_y,
+                    c=self.cloud_score,
+                    cmap="plasma",
+                    vmin=0,
+                    vmax=15,
+                    s=24,
+                    marker="+",
+                )
+                title = f"AURA — L0 Top-100 Contrast Cloud ({len(self.cloud_x)} features, score shown)"
+            else:
+                # L1 deliberately has no value channel: only X/Y are transmitted.
+                self.cloud_scatter = self.ax.scatter(
+                    self.cloud_x,
+                    self.cloud_y,
+                    s=24,
+                    marker="+",
+                )
+                title = f"AURA — L1 Top-1000 Landmark Map ({len(self.cloud_x)} points, X/Y only)"
+        else:
+            title = MODE_NAMES.get(self.current_mode, "AURA — Landmark Map")
+
+        self._fix_camera_axes(title)
         self.canvas.draw_idle()
 
-    def _render_entropy(self, matrix):
-        # Оновлення даних у реальному часі без повного очищення (set_data), як у твоєму коді
-        if self.im_entropy is not None and self.current_mode == "entropy":
-            self.im_entropy.set_data(matrix)
-        else:
+    def _render_entropy(self):
+        if self.heatmap is None:
+            return
+
+        if self.im_data is None or self.current_mode != "l2":
             self.ax.clear()
-            for ax in self.fig.axes[:]:
-                if ax != self.ax:
-                    self.fig.delaxes(ax)
-            
-            # Еталонний рендеринг: суто за індексами матриці, без спотворень
-            self.im_entropy = self.ax.imshow(
-                matrix,
+            self._clear_extra_axes()
+            self.im_data = self.ax.imshow(
+                self.heatmap,
                 cmap="jet",
                 interpolation="nearest",
                 vmin=0,
-                vmax=8
+                vmax=8,
+                extent=CAMERA_EXTENT,
+                origin="upper",
+                aspect="equal",
             )
-            self.ax.set_title(f"AURA Live Feed: Grayscale Verification ({self.heatmap_rows}x{self.heatmap_cols} Blocks)")
-            self.ax.set_xlabel("Block Column Index")
-            self.ax.set_ylabel("Block Row Index")
-            
-            self.cbar = self.fig.colorbar(self.im_entropy, ax=self.ax)
-            self.cbar.set_label("Shannon Entropy (bits/pixel)", rotation=270, labelpad=15)
-                
+            # Create exactly one colorbar for the L2 view. Never recreate it on updates.
+            cax = inset_axes(
+                self.ax,
+                width="3%",
+                height="80%",
+                loc="center right",
+                borderpad=1.5
+            )
+
+            self.cbar = self.fig.colorbar(self.im_data, cax=cax)
+            self.cbar.set_label(
+                "Shannon entropy (bits/pixel)",
+                rotation=270,
+                labelpad=15
+            )
+
+        else:
+            self.im_data.set_data(self.heatmap)
+
+        self._fix_camera_axes(
+            f"AURA — FULL Entropy Map ({self.heatmap_cols}×{self.heatmap_rows}, block={self.block_size}px)",
+            "Camera Pixel X",
+            "Camera Pixel Y",
+        )
         self.canvas.draw_idle()
 
-    def _render_image(self, image, mode):
-        self.ax.clear()
-        for ax in self.fig.axes[:]:
-            if ax != self.ax:
-                self.fig.delaxes(ax)
-        self.cbar = None
-        self.im_entropy = None
-        
-        self.ax.imshow(image, cmap="gray", vmin=0, vmax=255, interpolation="nearest")
-        title = "AURA — Full Science Image Frame" if mode == "full" else "AURA — Dynamic Zero-Gated Low-Entropy Compressed Frame"
-        self.ax.set_title(title)
-        self.ax.set_xlim(0, IMG_WIDTH)
-        self.ax.set_ylim(IMG_HEIGHT, 0)
-        self.ax.set_xlabel("Sensor Pixel X")
-        self.ax.set_ylabel("Sensor Pixel Y")
+    def _render_roi(self):
+        if self.im_data is None or self.current_mode != "l3":
+            self.ax.clear()
+            self._clear_extra_axes()
+            self._create_image_artist(
+                self.roi_frame,
+                f"AURA — Sparse ROI Reconstruction ({self.roi_received_blocks}/{self.roi_expected_blocks or '?'})",
+            )
+        else:
+            self.im_data.set_data(self.roi_frame)
+            self._fix_camera_axes(
+                f"AURA — Sparse ROI Reconstruction ({self.roi_received_blocks}/{self.roi_expected_blocks or '?'})"
+            )
+        self.canvas.draw_idle()
+
+    def _render_l4(self):
+        if self.im_data is None or self.current_mode != "l4":
+            self.ax.clear()
+            self._clear_extra_axes()
+            self._create_image_artist(
+                self.l4_frame,
+                f"AURA — Full Frame Streaming ({self.l4_received_blocks}/{self.l4_expected_blocks or '?'})",
+            )
+        else:
+            self.im_data.set_data(self.l4_frame)
+            self._fix_camera_axes(
+                f"AURA — Full Frame Streaming ({self.l4_received_blocks}/{self.l4_expected_blocks or '?'})"
+            )
         self.canvas.draw_idle()
 
     def _process_events(self):
@@ -450,8 +732,8 @@ class AuraGroundUI:
                     self.sock = payload
                     self.connected = True
                     self.busy = False
-                    self.status_var.set(f"Active Link to LEON3 Simulator Core at {HOST}:{PORT}")
-                    self.info_var.set("Link Established. Select telemetry processing architecture.")
+                    self.status_var.set(f"Active link to LEON3 simulator at {HOST}:{PORT}")
+                    self.info_var.set("Link established. Select AURA telemetry level.")
                     self.connect_button.configure(text="Disconnect", style="Disconnect.TButton", state="normal")
                     self.set_buttons_state(True)
 
@@ -461,80 +743,142 @@ class AuraGroundUI:
                     self.sock = None
                     self.status_var.set(payload)
                     self.info_var.set("Transport link failure.")
-                    self.set_buttons_state(False)
                     self.connect_button.configure(text="Connect", style="Connect.TButton", state="normal")
+                    self.set_buttons_state(False)
 
                 elif kind == "disconnected":
                     self.connected = False
                     self.busy = False
                     self.sock = None
-                    self.status_var.set("Link to Spacecraft Core Closed.")
-                    self.info_var.set("Click 'Connect' to re-establish synchronous link.")
-                    self.set_buttons_state(False)
+                    self.status_var.set("Link to spacecraft core closed.")
+                    self.info_var.set("Click Connect to re-establish the link.")
                     self.connect_button.configure(text="Connect", style="Connect.TButton", state="normal")
+                    self.set_buttons_state(False)
                     self._draw_empty()
 
                 elif kind == "ack":
-                    modes = {1: "CLOUD", 2: "ENTROPY", 3: "CUT IMAGE", 4: "FULL IMAGE"}
-                    self.status_var.set(f"LEON3 On-Board Execution ACK: Processing {modes.get(payload, 'UNKNOWN')}")
+                    self.status_var.set(f"LEON3 ACK: {ACK_NAMES.get(payload, 'UNKNOWN')}")
 
                 elif kind == "cloud_header":
-                    max_landmarks, step, threshold = payload
-                    self.info_var.set(f"Landmark Stream: limit={max_landmarks}, step={step}px, noise_threshold={threshold}")
-                    self._render_cloud(([], [], []))
+                    mode, count, step, threshold = payload
+                    self.cloud_requested = count
+                    self.cloud_step = step
+                    self.cloud_threshold = threshold
+                    self.info_var.set(
+                        f"{MODE_NAMES[mode]}: count={count}, sampling={step}px, threshold={threshold}"
+                    )
+                    self._render_cloud()
 
                 elif kind == "cloud_update":
-                    # Потокова отрисовка точок
-                    self._render_cloud(payload)
+                    self._render_cloud()
 
-                elif kind == "entropy_header":
+                elif kind == "l1_header":
+                    count, step, threshold = payload
+                    self.info_var.set(
+                        f"L1 coordinate stream: {count} points, {count * 3} payload bytes, no score channel"
+                    )
+
+                elif kind == "l1_points_complete":
+                    self._render_cloud()
+                    self.info_var.set(f"L1 map reconstructed: {len(self.cloud_x)} X/Y points")
+
+                elif kind == "l2_header":
                     rows, cols, block = payload
-                    self.im_entropy = None  # Скидаємо попередній рендер перед новою сіткою
-                    self.info_var.set(f"Telemetry Layout Unpacked: {cols * block}x{rows * block} | Block: {block}px ({rows}x{cols} grid)")
-                    self._render_entropy(np.zeros((rows, cols), dtype=np.float32))
+                    self.heatmap_rows = rows
+                    self.heatmap_cols = cols
+                    self.block_size = block
+                    self.heatmap = np.zeros((rows, cols), dtype=np.float32)
+                    self.heatmap_block_count = 0
+                    self._render_entropy()
+                    self.info_var.set(
+                        f"L2 FULL map: {cols}×{rows} blocks at {block}px; camera frame fixed at {IMG_WIDTH}×{IMG_HEIGHT}"
+                    )
 
-                elif kind == "entropy_update":
-                    # Потокова отрисовка блоків матриці ентропії в реальному часі
-                    self._render_entropy(payload)
+                elif kind == "l2_update":
+                    self._render_entropy()
 
-                elif kind == "cut_meta":
-                    block, threshold = payload
-                    self.info_var.set(f"Zero-Gating Parameter: kernel={block}px, zeroing arrays where entropy < {threshold:.2f} bits/px")
+                elif kind == "l2_count":
+                    self.heatmap_expected_blocks = payload
+                    self.info_var.set(f"L2 FULL entropy blocks: {payload}")
 
-                elif kind == "raw_header":
-                    mode, length = payload
-                    self.info_var.set(f"Downloading {MODE_NAMES[mode]}: Streaming {length / 1024:.2f} KiB raw memory packet...")
+                elif kind == "l3_header":
+                    rows, cols, block = payload
+                    self.roi_rows = rows
+                    self.roi_cols = cols
+                    self.roi_block_size = block
+                    self._render_roi()
+                    self.info_var.set(f"L3 layout: {cols}×{rows}, adaptive block={block}px")
 
-                elif kind == "raw_complete":
-                    mode, image = payload
-                    self.current_frame = image
-                    self._render_image(image, mode)
-                    if mode == "cut":
-                        zero_pct = float(np.mean(image == 0) * 100.0)
-                        self.info_var.set(f"Gated image unpacked. Hardware link bandwidth saved: {zero_pct:.2f}% of matrix nulled.")
-                    else:
-                        self.info_var.set("Full raw science data saved to ground database.")
+                elif kind == "l3_meta":
+                    self.roi_threshold = payload
+                    self.info_var.set(
+                        f"L3 entropy gate: retain blocks where entropy ≥ {payload:.2f} bits/pixel"
+                    )
+
+                elif kind == "l3_count":
+                    self.roi_expected_blocks = payload
+                    self.info_var.set(f"L3 selected blocks: {payload}")
+
+                elif kind == "l4_header":
+                    block, cols, rows = payload
+                    self._render_l4()
+                    self.info_var.set(
+                        f"L4 progressive stream: {cols}×{rows} blocks, block={block}px, raster order"
+                    )
+
+                elif kind == "image_block_complete":
+                    mode, col, row, block = payload
+                    if mode == "l3":
+                        x0, y0, bw, bh = self._block_shape(self.roi_block_size, col, row)
+                        self.roi_frame[y0:y0 + bh, x0:x0 + bw] = block
+                        self.roi_received_blocks += 1
+                        if self.roi_received_blocks % L3_REDRAW_EVERY == 0:
+                            self._render_roi()
+                    elif mode == "l4":
+                        x0, y0, bw, bh = self._block_shape(self.l4_block_size, col, row)
+                        self.l4_frame[y0:y0 + bh, x0:x0 + bw] = block
+                        self.l4_received_blocks += 1
+                        if self.l4_received_blocks % L4_REDRAW_EVERY == 0:
+                            self._render_l4()
 
                 elif kind == "frame_complete":
                     mode = self.current_mode
                     frame_bytes = self.rx_bytes_total - self.frame_started_bytes
-                    name = MODE_NAMES.get(mode, "Frame")
+                    raw_equivalent = RAW_IMAGE_BYTES
+                    saving = max(0.0, 100.0 * (1.0 - frame_bytes / raw_equivalent))
+                    ratio = raw_equivalent / frame_bytes if frame_bytes else 0.0
+
+                    # Always display the final state after the last packet/block.
+                    if mode == "l0" or mode == "l1":
+                        self._render_cloud()
+                        detail = f"{len(self.cloud_x)} landmarks"
+                    elif mode == "l2":
+                        self._render_entropy()
+                        detail = (
+                            f"{self.heatmap_block_count}/{self.heatmap_expected_blocks or '?'} entropy blocks, "
+                            f"block={self.block_size}px"
+                        )
+                    elif mode == "l3":
+                        self._render_roi()
+                        detail = (
+                            f"{self.roi_received_blocks}/{self.roi_expected_blocks or '?'} ROI blocks, "
+                            f"block={self.roi_block_size}px"
+                        )
+                    else:
+                        self._render_l4()
+                        detail = (
+                            f"{self.l4_received_blocks}/{self.l4_expected_blocks or '?'} image blocks, "
+                            f"block={self.l4_block_size}px"
+                        )
+
                     self.busy = False
                     self.set_buttons_state(True)
-                    self.status_var.set(f"Telemetry Packet Complete: {name}")
-
-                    if mode == "cloud":
-                        info = f"{name}: {len(self.cloud_x)} features, Real Telemetry Streamed = {frame_bytes} bytes ({frame_bytes / 1024:.2f} KiB)"
-                    elif mode == "entropy":
-                        info = f"{name}: {self.heatmap_rows * self.heatmap_cols} block metrics, Real Telemetry Streamed = {frame_bytes} bytes ({frame_bytes / 1024:.2f} KiB)"
-                    else:
-                        info = f"{name}: {RAW_IMAGE_BYTES} pixels matrix, Real Telemetry Streamed = {frame_bytes} bytes ({frame_bytes / 1024:.2f} KiB)"
-                    self.info_var.set(info)
-
-                    if mode == "cloud":
-                        self._render_cloud((self.cloud_x, self.cloud_y, self.cloud_score))
-                    elif mode == "entropy" and self.heatmap is not None:
-                        self._render_entropy(self.heatmap)
+                    self.status_var.set(f"Telemetry frame complete: {MODE_NAMES.get(mode, mode)}")
+                    self.info_var.set(
+                        f"{MODE_NAMES.get(mode, mode)}: {detail} | "
+                        f"wire={frame_bytes} B ({frame_bytes / 1024:.2f} KiB) | "
+                        f"saving={saving:.2f}% | raw/wire={ratio:.2f}×"
+                    )
 
         except queue.Empty:
             pass
@@ -545,18 +889,19 @@ class AuraGroundUI:
         self.stop_event.set()
         self.busy = False
         self.connected = False
-        try:
+        with self.sock_lock:
             if self.sock is not None:
-                self.sock.close()
-        except OSError:
-            pass
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
         plt.close(self.fig)
         self.root.destroy()
 
 
 def main():
     root = tk.Tk()
-    app = AuraGroundUI(root)
+    AuraGroundUI(root)
     root.mainloop()
 
 
