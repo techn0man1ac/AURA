@@ -1,13 +1,13 @@
 /*
- * AURA LEON3 Firmware V0.4.1
+ * AURA LEON3 Firmware V0.3
  *
  * Fixed 1020x1020, 8-bit grayscale image.
  *
  * Telemetry levels:
- *   L0 - Top-100 local-contrast maxima, X/Y + 4-bit score.
- *   L1 - Top-1000 local-contrast maxima, X/Y only (packed 20-bit points).
+ *   L0 - Top-100 local-contrast maxima, X/Y only (packed 20-bit points).
+ *   L1 - Top-1000 local-contrast maxima, X/Y + 8-bit pixel intensity.
  *   L2 - FULL adaptive Shannon entropy map for the whole image.
- *   L3 - Sparse ROI image blocks selected by entropy.
+ *   L3 - Sparse ROI image blocks selected by entropy and transmitted highest-priority first.
  *   L4 - FULL image streamed block-by-block in raster order.
  *
  * Ground commands:
@@ -16,12 +16,6 @@
  *   AURA L2\n
  *   AURA L3\n
  *   AURA L4\n
- *
- * V0.3 compatibility aliases are preserved:
- *   AURA CLOUD   -> L1
- *   AURA ENTROPY -> L2
- *   AURA CUT     -> L3
- *   AURA FULL    -> L4
  *
  * No dynamic allocation. No floating-point operations in the flight path.
  * Structured words are transmitted big-endian, 32-bit, byte-by-byte.
@@ -60,11 +54,17 @@
 /* Full-frame L4 stream uses a fixed raster block size. */
 #define L4_BLOCK_SIZE            16
 
+/* L3 priority mode: 0=entropy descending, 1=mean brightness descending. */
+#define L3_PRIORITY_MODE         0
+
 /* ---------------- Protocol markers --------------- */
 #define MARKER_ACK              0xAC
 #define MARKER_L0_HEADER        0x5B
 #define MARKER_L0_POINT         0xBD
 #define MARKER_L1_HEADER        0xB1
+#define MARKER_L2_COMPARE_BLOCKS  0xD7
+#define MARKER_L2_COMPARE_POINTS  0xD8
+#define MARKER_L2_COMPARE_HITS    0xD9
 #define MARKER_L2_HEADER        0xD0
 #define MARKER_L2_ENTROPY       0xD1
 #define MARKER_L2_COUNT         0xD2
@@ -92,8 +92,22 @@ static unsigned int landmark_count = 0;
 
 /* 256x256 byte grids = 64 KiB each; fixed maximum grid for 4x4 blocks. */
 static unsigned char roi_mask[MAX_ROI_CELLS];
-static unsigned char roi_keep[MAX_ROI_CELLS];
 static unsigned char block_seen[MAX_ROI_CELLS];
+static unsigned short selected_indices[MAX_ROI_CELLS];
+static unsigned short sorted_indices[MAX_ROI_CELLS];
+
+/* Cached per-block analysis. One cache is enough because one adaptive block size
+ * is selected per frame. The L2 result can therefore be reused by L3. */
+static unsigned char entropy_x10_cache[MAX_ROI_CELLS];
+static unsigned char block_mean_cache[MAX_ROI_CELLS];
+static unsigned char entropy_cache_valid = 0;
+static unsigned char entropy_cache_block_size = 0;
+static unsigned char entropy_cache_cols = 0;
+static unsigned char entropy_cache_rows = 0;
+
+static unsigned char landmarks_cache_valid = 0;
+
+static unsigned short entropy_histogram_81[81];
 
 static unsigned short entropy_histogram[256];
 static unsigned char entropy_used_bins[256];
@@ -289,54 +303,86 @@ static unsigned int collect_top_landmarks(unsigned int requested)
     return out;
 }
 
+static void ensure_landmark_cache(void)
+{
+    if (!landmarks_cache_valid) {
+        collect_top_landmarks(TOP_N_L1);
+        landmarks_cache_valid = 1;
+    }
+}
+
+static void send_packed_landmark_xy(unsigned short x, unsigned short y)
+{
+    unsigned int ux = ((unsigned int)x) & 0x03FFU;
+    unsigned int uy = ((unsigned int)y) & 0x03FFU;
+    /* 20 information bits are serialized in 3 bytes; low 4 bits of b2 are 0. */
+    unsigned char b0 = (unsigned char)(ux >> 2);
+    unsigned char b1 = (unsigned char)(((ux & 0x03U) << 6) | (uy >> 4));
+    unsigned char b2 = (unsigned char)((uy & 0x0FU) << 4);
+    uart_putc((char)b0);
+    uart_putc((char)b1);
+    uart_putc((char)b2);
+}
+
+static void send_packed_landmark_xy_intensity(unsigned short x, unsigned short y, unsigned char intensity)
+{
+    unsigned int ux = ((unsigned int)x) & 0x03FFU;
+    unsigned int uy = ((unsigned int)y) & 0x03FFU;
+    /* 10-bit X + 10-bit Y + 8-bit intensity = 28 bits, packed into 4 bytes.
+     * The upper 4 bits are reserved and transmitted as zero. */
+    unsigned int word = (ux << 18) | (uy << 8) | (unsigned int)intensity;
+    uart_putc((char)((word >> 24) & 0xFFU));
+    uart_putc((char)((word >> 16) & 0xFFU));
+    uart_putc((char)((word >> 8) & 0xFFU));
+    uart_putc((char)(word & 0xFFU));
+}
+
 static void send_l0_cloud(void)
 {
     unsigned int i;
-    unsigned int count = collect_top_landmarks(TOP_N_L0);
+    unsigned int count;
 
-    /* Header: marker | actual count(12) | step(4) | threshold(8). */
+    ensure_landmark_cache();
+    count = (landmark_count < TOP_N_L0) ? landmark_count : TOP_N_L0;
+
     uart_send_u32(
         ((unsigned int)MARKER_L0_HEADER << 24) |
         ((count & 0x0FFFU) << 12) |
         ((CLOUD_STEP & 0x0FU) << 8) |
         (CLOUD_THRESHOLD & 0xFFU));
 
-    for (i = 0; i < count; ++i) {
-        unsigned int score4 = ((unsigned int)landmarks[i].score_full >> 4) & 0x0FU;
-        unsigned int packet =
-            ((unsigned int)MARKER_L0_POINT << 24) |
-            (((unsigned int)landmarks[i].x & 0x03FFU) << 14) |
-            (((unsigned int)landmarks[i].y & 0x03FFU) << 4) |
-            score4;
-        uart_send_u32(packet);
-    }
+    /* L0 intentionally carries coordinates only: no intensity and no score. */
+    for (i = 0; i < count; ++i)
+        send_packed_landmark_xy(landmarks[i].x, landmarks[i].y);
+
     uart_send_u32(0xFE000000U);
 }
 
 static void send_l1_cloud(void)
 {
     unsigned int i;
-    unsigned int count = collect_top_landmarks(TOP_N_L1);
+    unsigned int count;
+    unsigned char *img = (unsigned char *)IMAGE_ADDRESS;
 
-    /* Header: marker | actual count(12) | step(4) | threshold(8). */
+    ensure_landmark_cache();
+    count = landmark_count;
+
     uart_send_u32(
         ((unsigned int)MARKER_L1_HEADER << 24) |
         ((count & 0x0FFFU) << 12) |
         ((CLOUD_STEP & 0x0FU) << 8) |
         (CLOUD_THRESHOLD & 0xFFU));
 
-    /* Each L1 point is packed into 20 bits and sent in 3 bytes.
-     * bit layout: X[9:0] | Y[9:0] | 4 reserved zero bits. */
+    /* L1 intentionally adds the raw 8-bit intensity at each selected point.
+     * Per-point record = 10-bit X + 10-bit Y + 8-bit intensity = 28 bits,
+     * serialized as a fixed 4-byte record for simple LEON3/Ground parsing. */
     for (i = 0; i < count; ++i) {
-        unsigned int x = landmarks[i].x & 0x03FFU;
-        unsigned int y = landmarks[i].y & 0x03FFU;
-        unsigned char b0 = (unsigned char)(x >> 2);
-        unsigned char b1 = (unsigned char)(((x & 0x03U) << 6) | (y >> 4));
-        unsigned char b2 = (unsigned char)((y & 0x0FU) << 4);
-        uart_putc((char)b0);
-        uart_putc((char)b1);
-        uart_putc((char)b2);
+        unsigned short x = landmarks[i].x;
+        unsigned short y = landmarks[i].y;
+        unsigned char intensity = img[(unsigned int)y * IMG_WIDTH + (unsigned int)x];
+        send_packed_landmark_xy_intensity(x, y, intensity);
     }
+
     uart_send_u32(0xFE000000U);
 }
 
@@ -394,7 +440,7 @@ static void build_roi_mask(int block_size)
     }
 }
 
-static unsigned int calculate_block_entropy_x100(int x0, int y0, int block_w, int block_h)
+static unsigned int calculate_block_entropy_x100(int x0, int y0, int block_w, int block_h, unsigned char *mean_out)
 {
     unsigned char *grayscale_pixels = (unsigned char *)IMAGE_ADDRESS;
     int used_bins_count = 0;
@@ -402,6 +448,7 @@ static unsigned int calculate_block_entropy_x100(int x0, int y0, int block_w, in
     int y, x;
     unsigned int total_q8 = 0;
     unsigned int log2_num_pixels_q8 = log2_q8[num_pixels];
+    unsigned int sum = 0;
 
     for (y = 0; y < block_h; ++y) {
         unsigned int base = (unsigned int)(y0 + y) * IMG_WIDTH + (unsigned int)x0;
@@ -410,6 +457,7 @@ static unsigned int calculate_block_entropy_x100(int x0, int y0, int block_w, in
             if (entropy_histogram[intensity] == 0)
                 entropy_used_bins[used_bins_count++] = (unsigned char)intensity;
             ++entropy_histogram[intensity];
+            sum += intensity;
         }
     }
 
@@ -421,7 +469,125 @@ static unsigned int calculate_block_entropy_x100(int x0, int y0, int block_w, in
         entropy_histogram[bin] = 0;
     }
 
+    if (mean_out != 0)
+        *mean_out = (unsigned char)((sum + ((unsigned int)num_pixels / 2U)) / (unsigned int)num_pixels);
+
     return (total_q8 * 100U) / ((unsigned int)num_pixels * 256U);
+}
+
+static void compute_entropy_cache(int block_size)
+{
+    int cols = ceil_div_int(IMG_WIDTH, block_size);
+    int rows = ceil_div_int(IMG_HEIGHT, block_size);
+    int row, col;
+
+    for (row = 0; row < rows; ++row) {
+        for (col = 0; col < cols; ++col) {
+            int x0 = col * block_size;
+            int y0 = row * block_size;
+            int bw = (x0 + block_size > IMG_WIDTH) ? (IMG_WIDTH - x0) : block_size;
+            int bh = (y0 + block_size > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : block_size;
+            int index = row * MAX_ROI_GRID + col;
+            unsigned char mean_value = 0;
+            unsigned int entropy_x100 = calculate_block_entropy_x100(x0, y0, bw, bh, &mean_value);
+            entropy_x10_cache[index] = (unsigned char)((entropy_x100 + 5U) / 10U);
+            block_mean_cache[index] = mean_value;
+        }
+    }
+
+    entropy_cache_block_size = (unsigned char)block_size;
+    entropy_cache_cols = (unsigned char)cols;
+    entropy_cache_rows = (unsigned char)rows;
+    entropy_cache_valid = 1;
+}
+
+static void ensure_entropy_cache(int block_size)
+{
+    if (!entropy_cache_valid || entropy_cache_block_size != (unsigned char)block_size)
+        compute_entropy_cache(block_size);
+}
+
+static void build_top10_entropy_mask(int cols, int rows, unsigned int *top10_count)
+{
+    unsigned int total_blocks = (unsigned int)(cols * rows);
+    unsigned int target = (total_blocks + 9U) / 10U;
+    unsigned int selected = 0;
+    int level;
+    int row, col;
+
+    for (level = 0; level <= 80; ++level) entropy_histogram_81[level] = 0;
+    for (row = 0; row < rows; ++row) {
+        for (col = 0; col < cols; ++col) {
+            int index = row * MAX_ROI_GRID + col;
+            unsigned int e = entropy_x10_cache[index];
+            if (e > 80U) e = 80U;
+            ++entropy_histogram_81[e];
+            block_seen[index] = 0;
+        }
+    }
+
+    for (level = 80; level >= 0 && selected < target; --level) {
+        unsigned int available = entropy_histogram_81[level];
+        if (available == 0) continue;
+        for (row = 0; row < rows && selected < target; ++row) {
+            for (col = 0; col < cols && selected < target; ++col) {
+                int index = row * MAX_ROI_GRID + col;
+                if (entropy_x10_cache[index] == (unsigned char)level) {
+                    block_seen[index] = 1;
+                    ++selected;
+                }
+            }
+        }
+    }
+    *top10_count = selected;
+}
+
+static void send_l2_compare_stats(int block_size, int cols, int rows)
+{
+    unsigned int top10_count = 0;
+    unsigned int overlap_blocks = 0;
+    unsigned int landmark_hits = 0;
+    int row, col;
+
+    build_top10_entropy_mask(cols, rows, &top10_count);
+
+    /* roi_mask becomes a set of blocks containing at least one Top-1000 landmark. */
+    for (row = 0; row < rows; ++row)
+        for (col = 0; col < cols; ++col)
+            roi_mask[row * MAX_ROI_GRID + col] = 0;
+
+    for (row = 0; row < (int)landmark_count; ++row) {
+        int bc = landmarks[row].x / block_size;
+        int br = landmarks[row].y / block_size;
+        if (bc >= 0 && br >= 0 && bc < cols && br < rows)
+            roi_mask[br * MAX_ROI_GRID + bc] = 1;
+    }
+
+    for (row = 0; row < rows; ++row) {
+        for (col = 0; col < cols; ++col) {
+            int index = row * MAX_ROI_GRID + col;
+            if (block_seen[index] && roi_mask[index]) ++overlap_blocks;
+        }
+    }
+
+    for (row = 0; row < (int)landmark_count; ++row) {
+        int bc = landmarks[row].x / block_size;
+        int br = landmarks[row].y / block_size;
+        if (bc >= 0 && br >= 0 && bc < cols && br < rows) {
+            int index = br * MAX_ROI_GRID + bc;
+            if (block_seen[index]) ++landmark_hits;
+        }
+    }
+
+    uart_send_u32(
+        ((unsigned int)MARKER_L2_COMPARE_BLOCKS << 24) |
+        ((top10_count & 0xFFFFU) << 0));
+    uart_send_u32(
+        ((unsigned int)MARKER_L2_COMPARE_POINTS << 24) |
+        (overlap_blocks & 0xFFFFU));
+    uart_send_u32(
+        ((unsigned int)MARKER_L2_COMPARE_HITS << 24) |
+        (landmark_hits & 0xFFFFU));
 }
 
 static void send_l2_entropy(void)
@@ -432,11 +598,11 @@ static void send_l2_entropy(void)
     int row, col;
     unsigned int total_blocks;
 
-    /* L1 determines only the analysis resolution; L2 itself is a FULL map. */
-    landmark_count = collect_top_landmarks(TOP_N_L1);
+    ensure_landmark_cache();
     block_size = choose_adaptive_block_size();
-    cols = ceil_div_int(IMG_WIDTH, block_size);
-    rows = ceil_div_int(IMG_HEIGHT, block_size);
+    ensure_entropy_cache(block_size);
+    cols = entropy_cache_cols;
+    rows = entropy_cache_rows;
     total_blocks = (unsigned int)(rows * cols);
 
     uart_send_u32(
@@ -447,24 +613,20 @@ static void send_l2_entropy(void)
 
     uart_send_u32(((unsigned int)MARKER_L2_COUNT << 24) | (total_blocks & 0xFFFFU));
 
-    /* Every block is sent in raster order: top-to-bottom, left-to-right. */
     for (row = 0; row < rows; ++row) {
         for (col = 0; col < cols; ++col) {
-            int x0 = col * block_size;
-            int y0 = row * block_size;
-            int bw = (x0 + block_size > IMG_WIDTH) ? (IMG_WIDTH - x0) : block_size;
-            int bh = (y0 + block_size > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : block_size;
-            unsigned int entropy = calculate_block_entropy_x100(x0, y0, bw, bh);
-            unsigned int entropy_x10 = (entropy + 5U) / 10U;
+            int index = row * MAX_ROI_GRID + col;
             unsigned int packet =
                 ((unsigned int)MARKER_L2_ENTROPY << 24) |
                 (((unsigned int)col & 0xFFU) << 16) |
                 (((unsigned int)row & 0xFFU) << 8) |
-                (entropy_x10 & 0xFFU);
+                ((unsigned int)entropy_x10_cache[index] & 0xFFU);
             uart_send_u32(packet);
         }
     }
 
+    /* Diagnostic comparison: Top-10% entropy blocks versus Top-1000 landmark blocks. */
+    send_l2_compare_stats(block_size, cols, rows);
     uart_send_u32(0xFE000000U);
 }
 
@@ -478,62 +640,111 @@ static void stream_block_pixels(int x0, int y0, int bw, int bh)
     }
 }
 
+static unsigned int l3_priority_value(int index)
+{
+#if L3_PRIORITY_MODE == 1
+    return (unsigned int)block_mean_cache[index];
+#else
+    return (unsigned int)entropy_x10_cache[index];
+#endif
+}
+
+static void build_l3_priority_order(int block_size, int cols, int rows, unsigned int *selected_count)
+{
+    unsigned int count = 0;
+    unsigned int i;
+    unsigned int bucket_count[81];
+    unsigned int bucket_start[81];
+    unsigned int cursor[81];
+    unsigned char threshold_x10 = (unsigned char)((CUT_ENTROPY_THRESHOLD_X100 + 5U) / 10U);
+    int row, col;
+
+    for (i = 0; i < 81U; ++i) {
+        bucket_count[i] = 0;
+        bucket_start[i] = 0;
+        cursor[i] = 0;
+    }
+
+    for (row = 0; row < rows; ++row) {
+        for (col = 0; col < cols; ++col) {
+            int index = row * MAX_ROI_GRID + col;
+            unsigned int priority;
+            if (!roi_mask[index]) continue;
+            if (entropy_x10_cache[index] < threshold_x10) continue;
+            priority = l3_priority_value(index);
+            if (L3_PRIORITY_MODE == 1) priority >>= 3; /* 0..255 -> 0..31 */
+            if (priority > 80U) priority = 80U;
+            bucket_count[priority]++;
+            selected_indices[count++] = (unsigned short)index;
+        }
+    }
+
+    for (i = 1; i <= 80U; ++i)
+        bucket_start[i] = bucket_start[i - 1] + bucket_count[i - 1];
+    for (i = 0; i <= 80U; ++i)
+        cursor[i] = bucket_start[i];
+
+    for (i = 0; i < count; ++i) {
+        unsigned int index = selected_indices[i];
+        unsigned int priority = l3_priority_value((int)index);
+        if (L3_PRIORITY_MODE == 1) priority >>= 3;
+        if (priority > 80U) priority = 80U;
+        sorted_indices[cursor[priority]++] = (unsigned short)index;
+    }
+
+    *selected_count = count;
+    (void)block_size;
+}
+
 static void send_l3_roi_image(void)
 {
     int block_size;
     int cols;
     int rows;
-    int row, col;
     unsigned int selected_count = 0;
+    unsigned int i;
 
-    landmark_count = collect_top_landmarks(TOP_N_L1);
+    ensure_landmark_cache();
     block_size = choose_adaptive_block_size();
-    cols = ceil_div_int(IMG_WIDTH, block_size);
-    rows = ceil_div_int(IMG_HEIGHT, block_size);
+    ensure_entropy_cache(block_size);
+    cols = entropy_cache_cols;
+    rows = entropy_cache_rows;
     build_roi_mask(block_size);
 
-    for (row = 0; row < rows; ++row) {
-        for (col = 0; col < cols; ++col) {
-            int index = row * MAX_ROI_GRID + col;
-            roi_keep[index] = 0;
-            if (roi_mask[index]) {
-                int x0 = col * block_size;
-                int y0 = row * block_size;
-                int bw = (x0 + block_size > IMG_WIDTH) ? (IMG_WIDTH - x0) : block_size;
-                int bh = (y0 + block_size > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : block_size;
-                unsigned int entropy = calculate_block_entropy_x100(x0, y0, bw, bh);
-                if (entropy >= CUT_ENTROPY_THRESHOLD_X100) {
-                    roi_keep[index] = 1;
-                    ++selected_count;
-                }
-            }
-        }
-    }
+    build_l3_priority_order(block_size, cols, rows, &selected_count);
 
     uart_send_u32(
         ((unsigned int)MARKER_L3_HEADER << 24) |
         ((unsigned int)(block_size & 0xFF) << 16) |
         ((unsigned int)(cols & 0xFF) << 8) |
         ((unsigned int)(rows & 0xFF)));
-    uart_send_u32(((unsigned int)MARKER_L3_META << 24) | (CUT_ENTROPY_THRESHOLD_X100 & 0xFFFFU));
+
+    /* Metadata: priority_mode in bits 23..16; exact entropy gate in bits 15..0. */
+    uart_send_u32(
+        ((unsigned int)MARKER_L3_META << 24) |
+        ((unsigned int)(L3_PRIORITY_MODE & 0xFF) << 16) |
+        (CUT_ENTROPY_THRESHOLD_X100 & 0xFFFFU));
+
     uart_send_u32(((unsigned int)MARKER_L3_COUNT << 24) | (selected_count & 0xFFFFU));
 
-    for (row = 0; row < rows; ++row) {
-        for (col = 0; col < cols; ++col) {
-            int index = row * MAX_ROI_GRID + col;
-            if (roi_keep[index]) {
-                int x0 = col * block_size;
-                int y0 = row * block_size;
-                int bw = (x0 + block_size > IMG_WIDTH) ? (IMG_WIDTH - x0) : block_size;
-                int bh = (y0 + block_size > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : block_size;
-                uart_send_u32(
-                    ((unsigned int)MARKER_L3_BLOCK << 24) |
-                    (((unsigned int)col & 0xFFU) << 16) |
-                    (((unsigned int)row & 0xFFU) << 8));
-                stream_block_pixels(x0, y0, bw, bh);
-            }
-        }
+    /* sorted_indices is ascending by priority bucket; transmit from the end so the
+     * ground segment receives the most informative blocks first. */
+    for (i = selected_count; i > 0U; --i) {
+        int index = (int)sorted_indices[i - 1U];
+        int row = index / MAX_ROI_GRID;
+        int col = index - row * MAX_ROI_GRID;
+        int x0 = col * block_size;
+        int y0 = row * block_size;
+        int bw = (x0 + block_size > IMG_WIDTH) ? (IMG_WIDTH - x0) : block_size;
+        int bh = (y0 + block_size > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : block_size;
+
+        uart_send_u32(
+            ((unsigned int)MARKER_L3_BLOCK << 24) |
+            (((unsigned int)col & 0xFFU) << 16) |
+            (((unsigned int)row & 0xFFU) << 8));
+        stream_block_pixels(x0, y0, bw, bh);
     }
+
     uart_send_u32(0xFE000000U);
 }
 
@@ -615,8 +826,8 @@ int main(void)
     int cmd_pos = 0;
 
     print_str("\n===================================\n");
-    print_str("AURA Firmware V0.4.1: Interactive Telemetry Core\n");
-    print_str("L0=Top100+score L1=Top1000(XY) L2=FULL entropy L3=ROI L4=FULL blocks\n");
+    print_str("AURA Firmware V0.3: Interactive Telemetry Core\n");
+    print_str("L0=Top100(XY) L1=Top1000(XY) L2=FULL entropy+comparison L3=priority ROI L4=FULL blocks\n");
     print_str("===================================\n\n");
 
     while (1) {

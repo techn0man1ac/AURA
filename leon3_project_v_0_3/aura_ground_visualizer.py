@@ -35,8 +35,8 @@ MODE_COMMANDS = {
 }
 
 MODE_NAMES = {
-    "l0": "L0 — Top-100 Landmark Cloud + Score",
-    "l1": "L1 — Top-1000 Landmark Map (X,Y only)",
+    "l0": "L0 — Top-100 Landmark Cloud (X,Y only)",
+    "l1": "L1 — Top-1000 Landmark Map (X,Y + intensity)",
     "l2": "L2 — Full Adaptive Entropy Map",
     "l3": "L3 — Sparse ROI Image",
     "l4": "L4 — Full Image / Block Stream",
@@ -49,6 +49,9 @@ MARKER_L1_HEADER = 0xB1
 MARKER_L2_HEADER = 0xD0
 MARKER_L2_ENTROPY = 0xD1
 MARKER_L2_COUNT = 0xD2
+MARKER_L2_COMPARE_BLOCKS = 0xD7
+MARKER_L2_COMPARE_POINTS = 0xD8
+MARKER_L2_COMPARE_HITS = 0xD9
 MARKER_L3_HEADER = 0xD3
 MARKER_L3_META = 0xD4
 MARKER_L3_BLOCK = 0xD5
@@ -59,7 +62,7 @@ MARKER_END = 0xFE
 
 ACK_NAMES = {
     10: "L0 TOP-100",
-    11: "L1 TOP-1000 (X,Y)",
+    11: "L1 TOP-1000 (X,Y + intensity)",
     12: "L2 FULL ENTROPY",
     13: "L3 SPARSE ROI",
     14: "L4 FULL FRAME STREAM",
@@ -68,7 +71,7 @@ ACK_NAMES = {
 class AuraGroundUI:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AURA V0.3 — Ground Segment / Multi-Channel Telemetry Console")
+        self.root.title("AURA V0.3 — Ground Segment / Information-First Telemetry Console")
         self.root.geometry("1500x950")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -94,15 +97,20 @@ class AuraGroundUI:
         self.block_size = 16
         self.heatmap_expected_blocks = 0
         self.heatmap_received_blocks = 0
+        self.l2_top10_count = 0
+        self.l2_overlap_blocks = 0
+        self.l2_landmark_hits = 0
 
         self.roi_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
         self.l4_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
         self.roi_block_size = 16
         self.roi_expected_blocks = 0
         self.roi_received_blocks = 0
+        self.roi_priority_mode = 0
         self.l4_expected_blocks = 0
         self.l4_received_blocks = 0
         self.roi_threshold = None
+        self.roi_priority_mode = 0
 
         # Низькорівневий парсер
         self.raw_expected = 0
@@ -267,7 +275,7 @@ class AuraGroundUI:
 
     def _parse_buffer(self):
         while True:
-            if self.parser_state in ("l1_points", "image_block"):
+            if self.parser_state in ("l0_points", "l1_points", "image_block"):
                 if self.raw_expected <= 0:
                     self.parser_state = "packet"
                     continue
@@ -281,17 +289,34 @@ class AuraGroundUI:
                 if len(self.raw_buffer) != self.raw_expected: return
 
                 payload = bytes(self.raw_buffer)
-                if self.parser_state == "l1_points":
+                if self.parser_state in ("l0_points", "l1_points"):
                     self.cloud_x = []
                     self.cloud_y = []
-                    self.cloud_score = [0] * (len(payload) // 3)
-                    for i in range(len(payload) // 3):
-                        base = i * 3
-                        x = (payload[base] << 2) | (payload[base + 1] >> 6)
-                        y = ((payload[base + 1] & 0x3F) << 4) | (payload[base + 2] >> 4)
-                        self.cloud_x.append(x)
-                        self.cloud_y.append(y)
-                    self.events.put(("l1_points_complete", None))
+                    self.cloud_score = []
+
+                    if self.parser_state == "l0_points":
+                        record_size = 3
+                        for i in range(len(payload) // record_size):
+                            base = i * record_size
+                            x = (payload[base] << 2) | (payload[base + 1] >> 6)
+                            y = ((payload[base + 1] & 0x3F) << 4) | (payload[base + 2] >> 4)
+                            self.cloud_x.append(x)
+                            self.cloud_y.append(y)
+                            self.cloud_score.append(0)
+                        self.events.put(("l0_points_complete", None))
+                    else:
+                        # L1 record: reserved[4] | X[10] | Y[10] | intensity[8] = 32 bits.
+                        record_size = 4
+                        for i in range(len(payload) // record_size):
+                            base = i * record_size
+                            word = struct.unpack(">I", payload[base:base + record_size])[0]
+                            x = (word >> 18) & 0x03FF
+                            y = (word >> 8) & 0x03FF
+                            intensity = word & 0xFF
+                            self.cloud_x.append(x)
+                            self.cloud_y.append(y)
+                            self.cloud_score.append(intensity)
+                        self.events.put(("l1_points_complete", None))
                 else:
                     block = np.frombuffer(payload, dtype=np.uint8).copy().reshape((self.raw_block_h, self.raw_block_w))
                     self.events.put(("image_block_complete", (self.raw_block_mode, self.raw_block_col, self.raw_block_row, block)))
@@ -319,15 +344,10 @@ class AuraGroundUI:
                 del self.parser_buffer[:4]
                 self.current_mode = "l0"
                 self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
+                count = (word >> 12) & 0x0FFF
+                self.raw_expected = count * 3
+                self.parser_state = "l0_points"
                 self.events.put(("header_init", "l0"))
-                continue
-
-            if marker == MARKER_L0_POINT:
-                del self.parser_buffer[:4]
-                x = (word >> 14) & 0x03FF
-                y = (word >> 4) & 0x03FF
-                score = word & 0x0F
-                self.events.put(("l0_point", (x, y, score)))
                 continue
 
             if marker == MARKER_L1_HEADER:
@@ -335,7 +355,7 @@ class AuraGroundUI:
                 self.current_mode = "l1"
                 self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
                 count = (word >> 12) & 0x0FFF
-                self.raw_expected = count * 3
+                self.raw_expected = count * 4
                 self.parser_state = "l1_points"
                 self.events.put(("header_init", "l1"))
                 continue
@@ -364,6 +384,22 @@ class AuraGroundUI:
                 self.heatmap_expected_blocks = word & 0xFFFF
                 continue
 
+            if marker == MARKER_L2_COMPARE_BLOCKS:
+                del self.parser_buffer[:4]
+                self.l2_top10_count = word & 0xFFFF
+                continue
+
+            if marker == MARKER_L2_COMPARE_POINTS:
+                del self.parser_buffer[:4]
+                self.l2_overlap_blocks = word & 0xFFFF
+                continue
+
+            if marker == MARKER_L2_COMPARE_HITS:
+                del self.parser_buffer[:4]
+                self.l2_landmark_hits = word & 0xFFFF
+                self.events.put(("l2_compare", None))
+                continue
+
             if marker == MARKER_L3_HEADER:
                 del self.parser_buffer[:4]
                 self.current_mode = "l3"
@@ -377,6 +413,7 @@ class AuraGroundUI:
 
             if marker == MARKER_L3_META:
                 del self.parser_buffer[:4]
+                self.roi_priority_mode = (word >> 16) & 0xFF
                 self.roi_threshold = (word & 0xFFFF) * 0.01
                 continue
 
@@ -437,6 +474,7 @@ class AuraGroundUI:
 
     def request_mode(self, mode: str):
         if not self.connected or self.busy: return
+        self.frame_started_bytes = self.rx_bytes_total
         with self.sock_lock:
             try: self.sock.sendall(MODE_COMMANDS[mode])
             except OSError as exc:
@@ -445,20 +483,21 @@ class AuraGroundUI:
 
         self.busy = True
         self.current_mode = mode
-        self.frame_started_bytes = self.rx_bytes_total
         self.info_var.set(f"Request sent: {MODE_NAMES[mode]} — downlinking architecture...")
         self.set_buttons_state(False)
 
     def _draw_l0_live(self):
         if self.scatter_cloud: self.scatter_cloud.remove()
-        self.scatter_cloud = self.ax_cloud.scatter(self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=15, s=20, marker="+")
-        self.ax_cloud.set_title(f"AURA — L0 Cloud Stream ({len(self.cloud_x)} features)")
+        self.scatter_cloud = self.ax_cloud.scatter(self.cloud_x, self.cloud_y, c="white", s=22, marker="+")
+        self.ax_cloud.set_title(f"AURA — L0 Coordinate-Only Cloud ({len(self.cloud_x)} features)")
         self.canvas_cloud.draw_idle()
 
     def _draw_l1_live(self):
         if self.scatter_cloud: self.scatter_cloud.remove()
-        self.scatter_cloud = self.ax_cloud.scatter(self.cloud_x, self.cloud_y, c="cyan", s=15, marker="+")
-        self.ax_cloud.set_title(f"AURA — L1 Map Stream ({len(self.cloud_x)} points)")
+        self.scatter_cloud = self.ax_cloud.scatter(
+            self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=255, s=18, marker="+"
+        )
+        self.ax_cloud.set_title(f"AURA — L1 Landmark + Intensity Stream ({len(self.cloud_x)} points)")
         self.canvas_cloud.draw_idle()
 
     def _draw_l2_live(self):
@@ -468,7 +507,8 @@ class AuraGroundUI:
 
     def _draw_l3_live(self):
         self.im_image.set_data(self.roi_frame)
-        self.ax_image.set_title(f"AURA — L3 ROI Gated Reconstruction ({self.roi_received_blocks} blocks)")
+        priority_name = "entropy" if getattr(self, "roi_priority_mode", 0) == 0 else "brightness"
+        self.ax_image.set_title(f"AURA — L3 ROI Gated Reconstruction ({self.roi_received_blocks} blocks, {priority_name} priority)")
         self.canvas_image.draw_idle()
 
     def _draw_l4_live(self):
@@ -477,39 +517,58 @@ class AuraGroundUI:
         self.canvas_image.draw_idle()
 
     def _trigger_save_menu(self, channel_type):
-        # Контекстне вікно збереження у вихідній роздільній здатності 1020x1020
         file_path = filedialog.asksaveasfilename(
             defaultextension=".png",
-            filetypes=[("PNG Image", "*.png"), ("JPEG Image", "*.jpg")],
-            title=f"Export {channel_type.upper()} Data Channel in Native 1020x1020"
+            filetypes=[("PNG Image", "*.png"), ("JPEG Image", "*.jpg;*.jpeg")],
+            title=f"Export {channel_type.upper()} Data Channel (1020×1020)"
         )
         if not file_path:
             return
 
-        # Створюємо чисту тимчасову автономну фігуру для збереження оригінальної матриці
-        export_fig, export_ax = plt.subplots(figsize=(10.2, 10.2), dpi=100)
-        export_fig.subplots_adjust(left=0, right=1, bottom=0, top=1) # Запобігає обрізанню країв
-        export_ax.set_xlim(0, IMG_WIDTH)
-        export_ax.set_ylim(IMG_HEIGHT, 0)
-        export_ax.axis('off')  # Ховаємо індекси шкал для чистого експорту зображення
+        try:
+            from PIL import Image
 
-        if channel_type == "cloud" and self.cloud_x:
-            export_ax.set_facecolor("#0b0c10")
-            if self.current_mode == "l0":
-                export_ax.scatter(self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=15, s=35, marker="+")
-            else:
-                export_ax.scatter(self.cloud_x, self.cloud_y, c="cyan", s=30, marker="+")
-        elif channel_type == "entropy":
-            export_ax.imshow(self.heatmap, cmap="jet", interpolation="nearest", vmin=0, vmax=8, extent=CAMERA_EXTENT, origin="upper")
-        elif channel_type == "image":
-            frame_data = self.roi_frame if self.current_mode == "l3" else self.l4_frame
-            export_ax.imshow(frame_data, cmap="gray", vmin=0, vmax=255, interpolation="nearest", extent=CAMERA_EXTENT, origin="upper")
+            ext = os.path.splitext(file_path)[1].lower()
+            if channel_type == "image":
+                frame_data = self.roi_frame if self.current_mode == "l3" else self.l4_frame
+                image = Image.fromarray(frame_data.astype(np.uint8), mode="L")
+                if ext in (".jpg", ".jpeg"):
+                    image.save(file_path, format="JPEG", quality=95)
+                else:
+                    image.save(file_path, format="PNG")
+                return
 
-        # Збереження строго у розмільній здатності 1020x1020 пікселів
-        export_fig.savefig(file_path, format="png", bbox_inches='tight', pad_inches=0)
-        plt.close(export_fig)
+            export_fig = plt.figure(figsize=(10.2, 10.2), dpi=100)
+            export_ax = export_fig.add_axes([0, 0, 1, 1])
+            export_ax.set_xlim(0, IMG_WIDTH)
+            export_ax.set_ylim(IMG_HEIGHT, 0)
+            export_ax.axis("off")
+
+            if channel_type == "cloud":
+                export_ax.set_facecolor("#0b0c10")
+                if self.current_mode == "l0":
+                    export_ax.scatter(self.cloud_x, self.cloud_y, c="white", s=24, marker="+")
+                else:
+                    export_ax.scatter(self.cloud_x, self.cloud_y, c="cyan", s=20, marker="+")
+            elif channel_type == "entropy":
+                export_ax.imshow(
+                    self.heatmap,
+                    cmap="jet",
+                    interpolation="nearest",
+                    vmin=0,
+                    vmax=8,
+                    extent=CAMERA_EXTENT,
+                    origin="upper",
+                    aspect="auto",
+                )
+
+            export_fig.savefig(file_path, format="png", dpi=100, pad_inches=0)
+            plt.close(export_fig)
+        except Exception as exc:
+            messagebox.showerror("AURA export error", f"Could not save {file_path}: {exc}")
 
     def _log_to_csv(self, current_mode_str, wire_bytes, saving_pct, ratio):
+        os.makedirs(os.path.dirname(CSV_LOG_FILE), exist_ok=True)
         file_exists = os.path.isfile(CSV_LOG_FILE)
         try:
             with open(CSV_LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
@@ -534,7 +593,7 @@ class AuraGroundUI:
     def _process_events(self):
         try:
             burst_counter = 0
-            while burst_counter < 2000:
+            while burst_counter < 64:
                 try:
                     kind, payload = self.events.get_nowait()
                     burst_counter += 1
@@ -574,11 +633,13 @@ class AuraGroundUI:
                         self._draw_l2_live()
 
                 elif kind == "l0_point":
-                    x, y, score = payload
+                    x, y = payload
                     self.cloud_x.append(x)
                     self.cloud_y.append(y)
-                    self.cloud_score.append(score)
-                    if len(self.cloud_x) % 2 == 0: self._draw_l0_live()
+                    self.cloud_score.append(0)
+
+                elif kind == "l0_points_complete":
+                    self._draw_l0_live()
 
                 elif kind == "l1_points_complete":
                     self._draw_l1_live()
@@ -590,6 +651,13 @@ class AuraGroundUI:
                         self.heatmap_received_blocks += 1
                         if self.heatmap_received_blocks % 4 == 0: self._draw_l2_live()
 
+                elif kind == "l2_compare":
+                    self.status_var.set(
+                        f"L2 comparison: Top-10% entropy blocks={self.l2_top10_count} | "
+                        f"landmark-block overlap={self.l2_overlap_blocks} | "
+                        f"landmarks inside Top-10%={self.l2_landmark_hits}/{len(self.cloud_x) or 1000}"
+                    )
+
                 elif kind == "image_block_complete":
                     mode, col, row, block = payload
                     if mode == "l3":
@@ -597,7 +665,9 @@ class AuraGroundUI:
                         y0 = row * self.roi_block_size
                         self.roi_frame[y0:y0+block.shape[0], x0:x0+block.shape[1]] = block
                         self.roi_received_blocks += 1
-                        if self.roi_received_blocks % 2 == 0: self._draw_l3_live()
+                        # L3 is ordered by priority on the spacecraft; redraw each
+                        # block so the "interesting first" effect is visible.
+                        self._draw_l3_live()
                     elif mode == "l4":
                         x0 = col * self.l4_block_size
                         y0 = row * self.l4_block_size
@@ -618,9 +688,12 @@ class AuraGroundUI:
                     elif self.current_mode == "l3": self._draw_l3_live()
                     elif self.current_mode == "l4": self._draw_l4_live()
 
+                    priority_detail = ""
+                    if self.current_mode == "l3":
+                        priority_detail = " | priority=entropy" if self.roi_priority_mode == 0 else " | priority=brightness"
                     self.info_var.set(
                         f"Downlink Finished | wire={frame_bytes} B ({frame_bytes / 1024:.2f} KiB) | "
-                        f"bandwidth_saved={saving:.2f}% | raw/wire={ratio:.2f}×"
+                        f"bandwidth_saved={saving:.2f}% | raw/wire={ratio:.2f}×{priority_detail}"
                     )
                     
                     self._log_to_csv(self.current_mode, frame_bytes, saving, ratio)
