@@ -30,7 +30,7 @@
 #define IMAGE_ADDRESS 0x40600000
 #define IMG_WIDTH     1020
 #define IMG_HEIGHT    1020
-#define IMAGE_BYTES   (IMG_WIDTH * IMG_HEIGHT)
+#define IMAGE_BYTES   1040400  // ФІКС: Пряме залізобетонне число байт (1020 * 1020)
 
 /* ---------------- Feature cloud ---------------- */
 #define CLOUD_THRESHOLD        45
@@ -752,30 +752,66 @@ static void send_full_image(void)
 {
     int cols = ceil_div_int(IMG_WIDTH, L4_BLOCK_SIZE);
     int rows = ceil_div_int(IMG_HEIGHT, L4_BLOCK_SIZE);
-    int row, col;
+    int half_cols = cols / 2;
+    int row, i;
 
-    /* C0: block_size | cols | rows. Payload is a sequence of C3+raw blocks. */
+    /* C0: заголовок з розмірами сітки */
     uart_send_u32(
         ((unsigned int)MARKER_FULL_HEADER << 24) |
         ((unsigned int)(L4_BLOCK_SIZE & 0xFF) << 16) |
         ((unsigned int)(cols & 0xFF) << 8) |
         ((unsigned int)(rows & 0xFF)));
 
-    for (row = 0; row < rows; ++row) {
-        for (col = 0; col < cols; ++col) {
-            int x0 = col * L4_BLOCK_SIZE;
+    /* Ідемо вертикальними смугами від країв до центру */
+    for (i = 0; i < half_cols; ++i) {
+        // 1. Ліва половина: зліва направо (стовпчик i)
+        int col_left = i;
+        for (row = 0; row < rows; ++row) {
+            int x0 = col_left * L4_BLOCK_SIZE;
             int y0 = row * L4_BLOCK_SIZE;
             int bw = (x0 + L4_BLOCK_SIZE > IMG_WIDTH) ? (IMG_WIDTH - x0) : L4_BLOCK_SIZE;
             int bh = (y0 + L4_BLOCK_SIZE > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : L4_BLOCK_SIZE;
 
-            /* Raster order is explicit: row first, then column. */
             uart_send_u32(
                 ((unsigned int)MARKER_FULL_BLOCK << 24) |
-                (((unsigned int)col & 0xFFU) << 16) |
+                (((unsigned int)col_left & 0xFFU) << 16) |
+                (((unsigned int)row & 0xFFU) << 8));
+            stream_block_pixels(x0, y0, bw, bh);
+        }
+
+        // 2. Права половина: справа наліво (стовпчик cols - 1 - i)
+        int col_right = cols - 1 - i;
+        for (row = 0; row < rows; ++row) {
+            int x0 = col_right * L4_BLOCK_SIZE;
+            int y0 = row * L4_BLOCK_SIZE;
+            int bw = (x0 + L4_BLOCK_SIZE > IMG_WIDTH) ? (IMG_WIDTH - x0) : L4_BLOCK_SIZE;
+            int bh = (y0 + L4_BLOCK_SIZE > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : L4_BLOCK_SIZE;
+
+            uart_send_u32(
+                ((unsigned int)MARKER_FULL_BLOCK << 24) |
+                (((unsigned int)col_right & 0xFFU) << 16) |
                 (((unsigned int)row & 0xFFU) << 8));
             stream_block_pixels(x0, y0, bw, bh);
         }
     }
+
+    /* Якщо кількість стовпців непарна, дописуємо центральний стовпчик */
+    if (cols % 2 != 0) {
+        int col_mid = half_cols;
+        for (row = 0; row < rows; ++row) {
+            int x0 = col_mid * L4_BLOCK_SIZE;
+            int y0 = row * L4_BLOCK_SIZE;
+            int bw = (x0 + L4_BLOCK_SIZE > IMG_WIDTH) ? (IMG_WIDTH - x0) : L4_BLOCK_SIZE;
+            int bh = (y0 + L4_BLOCK_SIZE > IMG_HEIGHT) ? (IMG_HEIGHT - y0) : L4_BLOCK_SIZE;
+
+            uart_send_u32(
+                ((unsigned int)MARKER_FULL_BLOCK << 24) |
+                (((unsigned int)col_mid & 0xFFU) << 16) |
+                (((unsigned int)row & 0xFFU) << 8));
+            stream_block_pixels(x0, y0, bw, bh);
+        }
+    }
+
     uart_send_u32(0xFE000000U);
 }
 

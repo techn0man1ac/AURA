@@ -629,7 +629,8 @@ class AuraGroundUI:
                         self.ax_cloud.set_ylim(IMG_HEIGHT, 0)
                         self.scatter_cloud = None
                     elif payload == "l2":
-                        self.heatmap.fill(0)
+                        # ФІКС: Перестворюємо нульову матрицю під реальний розмір сітки з заголовка
+                        self.heatmap = np.zeros((self.heatmap_rows, self.heatmap_cols), dtype=np.float32)
                         self._draw_l2_live()
 
                 elif kind == "l0_point":
@@ -663,17 +664,19 @@ class AuraGroundUI:
                     if mode == "l3":
                         x0 = col * self.roi_block_size
                         y0 = row * self.roi_block_size
-                        self.roi_frame[y0:y0+block.shape[0], x0:x0+block.shape[1]] = block
+                        bh, bw = block.shape
+                        self.roi_frame[y0:y0+bh, x0:x0+bw] = block
                         self.roi_received_blocks += 1
-                        # L3 is ordered by priority on the spacecraft; redraw each
-                        # block so the "interesting first" effect is visible.
                         self._draw_l3_live()
                     elif mode == "l4":
                         x0 = col * self.l4_block_size
                         y0 = row * self.l4_block_size
-                        self.l4_frame[y0:y0+block.shape[0], x0:x0+block.shape[1]] = block
+                        bh, bw = block.shape
+                        self.l4_frame[y0:y0+bh, x0:x0+bw] = block
                         self.l4_received_blocks += 1
-                        if self.l4_received_blocks % 4 == 0: self._draw_l4_live()
+                        # ФІКС: Оновлюємо кожний перший блок (прибираємо % 4),
+                        # щоб бачити плавний рух зустрічних вертикальних смуг
+                        self._draw_l4_live()
 
                 elif kind == "frame_complete":
                     self.busy = False
