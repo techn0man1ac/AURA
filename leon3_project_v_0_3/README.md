@@ -5,7 +5,7 @@
 ## Project Overview
 **AURA** is an experimental on-board flight software pipeline designed for real-time, resource-constrained edge computing during deep-space small-body rendezvous operations. The primary objective of the architecture is to process high-resolution optical matrices locally, compute statistical data density patterns, and isolate high-entropy regions of interest (ROI) to facilitate autonomous proximity operations without saturated communication downlinks.
 
-This implementation is architected to achieve **Technology Readiness Level 4 (TRL 4)** validation, operating within a simulated aerospace environment representative of the European Space Agency's (ESA) **Hera** deep-space mission profile.
+This implementation achieves **Technology Readiness Level 4 (TRL 4)** validation, operating within a simulated aerospace environment representative of the European Space Agency's (ESA) **Hera** deep-space mission profile.
 
 ---
 
@@ -15,27 +15,28 @@ To comply with strict aerospace software engineering standards (such as ECSS Cat
 *   **Memory Restrictions:** Strict **16 MB RAM** static partition sandbox. Dynamic memory allocation (`malloc`, `free`) is entirely omitted to enforce execution determinism.
 *   **Sensor Interfacing:** Interfaced with a simulated **Hera AFC** navigation camera utilizing a monochrome sensor configuration: **1020x1020 pixels, strict 8-bit Grayscale** (1 byte per pixel, total raw frame size: 1,040,400 bytes).
 *   **Zero Floating-Point Unit (FPU) Overhead:** Fixed-point integer mathematical models completely replace standard floating-point functions (`float`, `double`, `log2f`). Logarithmic probabilities are resolved using ultra-fast bitwise arithmetic via a pre-calculated `log2_q8` lookup array in Q8 fixed-point format.
-*   **Histogram Footprint Optimization:** Features a dedicated tracking stack that enables precise, point-by-point clearing of modified memory indexes. This bounds clearing operations to \(O(N)\) efficiency (where \(N\) is the count of active grayscale channels per block), maintaining internal CPU cache efficiency.
+*   **On-Board Entropy Cache:** The Shannon entropy calculation results are fully cached (`entropy_x10_cache[]`, `block_mean_cache[]`) and shared between L2 and L3 channels, completely eliminating duplicate CPU clock-cycle overhead.
 
----
+## Multi-Level Telemetry & Bidirectional Command Array
+AURA operates as an interactive, closed-loop **Telemetry & Telecommand (TTC)** system. Data serialization circumvents human-readable strings inside the real-time processing loop. Instead, the firmware packs localized statistical telemetry directly into high-density **32-bit unsigned integer registers** (`uint32`), allocating parameters down to the exact bit level:
 
-## Multi-Level Telemetry & Link Compression Footprint
-Data serialization circumvents human-readable ASCII or string parsing inside the real-time processing loop. Instead, the firmware packs localized statistical telemetry directly into high-density **32-bit unsigned integer registers** (`uint32`), allocating data parameters down to the exact bit level based on the selected Telemetry Level:
+*   **L0 — Top-100 Landmark Cloud:** Downlinks packed local-contrast maxima coordinates (X, Y) compressed into 20 bits per point, transmitted via 3 sequential bytes. Traffic reduction: **99.97%**.
+*   **L1 — Top-1000 Landmark Map with Edge Vectors:** Packs 10-bit X, 10-bit Y, a 4-bit pixel intensity, and a **4-bit localized anisotropic gradient direction angle**. This transforms standard coordinate points into directional surface descriptors (ORB-like features). Traffic reduction: **99.92%**.
+*   **L2 — Full Entropy Map with Cross-Validation:** Streams a continuous matrix of Shannon entropy metrics (adaptive 16px/8px/4px blocks) with integrated on-board diagnostic cross-matching (MARKER_L2_COMPARE) mapping structural landmarks against high-entropy zones. Traffic reduction: **98.42%**.
+*   **L3 — Sparse ROI Image (Logical UNION Mode):** Transmits highly informative surface segments generated via the logical union (\(\text{ROI} = A \cup B\)) of landmark-driven and entropy-driven masks. Blocks are prioritized on-board and streamed **highest-entropy first**, allowing Ground Segments to receive scientific payload anchors instantly. Bandwidth savings: **~79.00%**.
+*   **L4 — Full Image (Opposing Vertical Scan):** Raw uncompressed frame verification layer. To support rapid optical silhouette stabilization, blocks are progressively streamed via a **bilinear counter-directional pattern** executing from the left and right frame borders simultaneously towards the center.
 
-*   **L0 — Top-100 Landmark Cloud + Score:** Downlinks local-contrast maxima coordinates (X, Y) with an attached 4-bit intensity score. Reduces traffic by **99.96%**.
-*   **L1 — Top-1000 Landmark Map (X, Y only):** Streams high-density packed coordinates (20 bits per point, transmitted byte-by-byte via 3 sequential bytes) to bypass telemetry score overhead. Reduces traffic by **99.94%**.
-*   **L2 — Full Adaptive Entropy Map:** Streams a continuous 64x64 matrix of Shannon entropy metrics (16px blocks) covering the entire sensor field. Reduces traffic by **98.42%**.
-*   **L3 — Sparse ROI Image Blocks:** Transmits only high-entropy surface segments (where \(Entropy \geq 2.50\) bits/pixel), entirely nulling out empty deep-space arrays. Achieves **~79.00% bandwidth savings** while retaining 100% of scientific landmarks.
-*   **L4 — Full Image / Block Stream:** Raw uncompressed frame verification layer, progressively streaming 16x16 pixel blocks in explicit raster order.
+### On-Board Software Gating Telecommand (Uplink Loop)
+Ground operators can dynamically tune the balance between downlink bandwidth volume and scientific data density by transmitting an **Uplink Telecommand (`AURA GATE <val>`)** in real-time. The virtual spacecraft captures the instruction via the UART interface, unblocks the execution thread, and rewrites the on-board filtering register on the fly.
 
 ### Bit Allocation for L2 Entropy Serialization Word:
 
 | Bit Range | Size (Bits) | Description |
 |---|---|---|
-| **[31:24]** | 8 | Synchronization / Data frame identifier marker (`0xA5`). |
+| **[31:24]** | 8 | Synchronization / Data frame identifier marker (`0xD1`). |
 | **[23:16]** | 8 | Column Index (`col_idx`), representing block X-coordinate layout. |
 | **[15:8]**  | 8 | Row Index (`row_idx`), representing block Y-coordinate layout. |
-| **[7:0]**   | 8 | Scaled Shannon Entropy value (\(Entropy \times 10\)). |
+| **[7:0]**   | 8 | Scaled Shannon Entropy value (Entropy × 10). |
 
 *   **Trap & Exception Mitigation:** The packed 32-bit words are transmitted over the physical interface byte-by-byte via sequential register flushing. This prevents unaligned word memory access anomalies, completely eliminating the risk of critical processor exceptions (**SPARC Trap 0x07 / Data Access Alignment Trap**).
 
@@ -43,39 +44,37 @@ Data serialization circumvents human-readable ASCII or string parsing inside the
 
 ## Repository Structure
 The production-ready V0.3 workspace contains the following core files:
-*   `Hello_AURA.c` — Independent, standalone core flight software application executing the bare-metal fixed-point telemetry pipeline.
-*   `experiment_test.elf` — The final compiled space-grade executable binary containing embedded image matrices.
-*   `image.bin` — The raw 8-bit monochrome binary matrix extracted for hardware memory direct mapping (`0x40600000`).
-*   `leon3.repl` / `script.resc` — Renode platform description and automation deployment scripts establishing loopback socket bindings.
-*   `AuraGroundUI.py` — The Ground Segment interactive multi-channel visualizer decoding binary flows into a synchronized real-time multi-display dashboard.
-*   `logs/aura_telemetry_log.csv` — Automated mission logger tracking byte volumes, bandwidth savings, and compression factors dynamically.
-
----
+*   `Hello_AURA.c` — Standalone core flight software executing the fixed-point telemetry processing loops and TTC parsing.
+*   `experiment_test.elf` — The compiled space-grade executable target binary.
+*   `image.bin` — Raw 8-bit monochrome asteroid camera sensor matrix direct-mapped at `0x40600000`.
+*   `leon3.repl` / `script.resc` — Renode hardware platform infrastructure and automation deployment configurations.
+*   `AuraGroundUI.py` — Multi-channel Ground Segment console running an asynchronous receiver thread, dynamic heatmap scaling, and real-time dashboard plotting.
+*   `logs/aura_telemetry_log.csv` — Automated performance logger capturing runtime mission audits.
 
 ## Deployment & Execution Procedure
 
 ### Step 1: Toolchain Cross-Compilation
-To compile the independent flight software from source using the official Aeroflex Gaisler BCC2 cross-compiler toolchain, execute the following command within a Windows PowerShell terminal. This bypasses default startup routines and links the custom assembly bootloader:
+To cross-compile the standalone flight software application from source using the official Aeroflex Gaisler BCC2 cross-compiler toolchain, execute the following command within a Windows PowerShell terminal:
 
 ```powershell
 & "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g Hello_AURA.c -o experiment_test.elf "-Wl,-Ttext=0x40000000" "-Wl,-z,muldefs" -lgcc
 ```
 
 ### Step 2: Launch the Spacecraft Emulation Framework
-In the primary command terminal, initiate the software-in-the-loop validation inside the Renode environment:
+In a separate terminal window, initiate the Software-in-the-Loop (SIL) validation inside the Renode environment:
 ```powershell
 renode script.resc
 ```
 
 ### Step 3: Initialize the Ground Segment Console
-Open a separate terminal window and launch the English-standardized real-time telemetry decoder:
+Launch the English-standardized real-time telemetry decoder to listen for loopback interface streaming:
 ```powershell
 python AuraGroundUI.py
 ```
 
 ### Step 4: Interactive Operation & Analytics Export
-1. Click the **"Connect"** button on the top-right of the Ground Console to bond the telemetry channel.
-2. Select any requested telemetry level (`L0` to `L4`) to command the virtual LEON3 core.
-3. Observe **zero-latency real-time block rendering** as data progressive packages arrive over the loopback interface.
-4. **Data Export:** Right-click on any of the active plot displays (Landmark Cloud, Entropy Map, or Science Frame) to save the current dataset into a clean, native **1020x1020 PNG image** without UI borders.
-5. **Mission Logs:** Explore the `logs/aura_telemetry_log.csv` file for automated, step-by-step performance audits.
+1. Click the **"Connect"** button on the Ground Console to establish the synchronous radio link.
+2. Select any requested telemetry level (`L0` to `L4`) to command the onboard computer.
+3. Adjust the **Shannon Entropy Compression Threshold** slider on the Ground UI and click **"Transmit Gate Command"** to rewrite the spacecraft's data filtering rules in real time.
+4. **Data Export:** Right-click on any active plot component (Landmark View, Entropy Map, or Science Frame) to trigger a native **1020x1020 high-fidelity export** saved via Pillow directly as a raw array.
+5. **Mission Logs:** Open the `logs/aura_telemetry_log.csv` directory to analyze byte counts, compression ratios, and transmission timestamps.
