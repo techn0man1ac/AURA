@@ -1,3 +1,42 @@
+"""
+AURA Ground Segment Telemetry Decoder & Console V0.3
+===================================================
+
+Supported Multi-Channel Downlink Protocol Layout:
+-------------------------------------------------
+All structured packets arrive big-endian, packed into 32-bit registers (uint32) 
+and flushed over the serial/socket link byte-by-byte to prevent unaligned 
+Data Access Traps on space-grade SPARC architectures.
+
+1. L0 / L1 Landmark Clouds (Markers 0x5B, 0xB1):
+   - L0 Layer: Packs 10-bit X and 10-bit Y coordinate indices into sequential 
+     3-byte records, completely cutting padding and score overhead.
+   - L1 Layer: Packs 10-bit X, 10-bit Y, a 4-bit edge vector direction angle, 
+     and a 4-bit pixel intensity into strict 4-byte packed words.
+
+2. L2 Shannon Entropy Matrix (Marker 0xD0, 0xD1):
+   - Streams an adaptive 64x64 data density map where every block payload word 
+     contains: [Marker: 8-bit] | [Col_Idx: 8-bit] | [Row_Idx: 8-bit] | [Entropy_x10: 8-bit].
+   - Followed by automated on-board cross-validation benchmarks:
+     * MARKER_L2_COMPARE_BLOCKS (0xD7) - Top-10% highest entropy blocks.
+     * MARKER_L2_COMPARE_POINTS (0xD8) - Landmark-to-block geometric overlaps.
+     * MARKER_L2_COMPARE_HITS   (0xD9) - Landmark hits matching the high-entropy mask.
+
+3. L3 / L4 Raster Graphics Core (Markers 0xD3, 0xC0):
+   - L3 Gated ROI Mode: Progressively downlinks informative surface segments 
+     derived via the logical union (A U B) of landmark and entropy structures. 
+     Blocks are prioritized on-board and sorted highest-entropy first.
+   - L4 Raster Mode: Progressive frame validation layer streaming raw 16x16 
+     pixel matrices using a bilinear counter-directional vertical scanning pattern 
+     moving from the frame margins simultaneously towards the image center.
+
+Uplink Telecommands (TTC Command Array):
+----------------------------------------
+- "AURA L0\n" up to "AURA L4\n" -> Triggers immediate execution thread on-board.
+- "AURA GATE <val_x100>\n"      -> Remotely rewrites the spacecraft's active 
+                                   Shannon filtering threshold register on the fly.
+"""
+
 import queue
 import socket
 import struct
@@ -5,7 +44,7 @@ import threading
 import time
 import csv
 import os
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 import tkinter as tk
 
 import numpy as np
@@ -18,6 +57,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
+# --- Network and Spatial Payload Constraints ---
 HOST = "127.0.0.1"
 PORT = 12345
 IMG_WIDTH = 1020
@@ -26,6 +66,7 @@ RAW_IMAGE_BYTES = IMG_WIDTH * IMG_HEIGHT
 CAMERA_EXTENT = (0, IMG_WIDTH, IMG_HEIGHT, 0)
 CSV_LOG_FILE = os.path.join("logs", "aura_telemetry_log.csv")
 
+# --- Uplink Telecommand Byte Sequences (TTC) ---
 MODE_COMMANDS = {
     "l0": b"AURA L0\n",
     "l1": b"AURA L1\n",
@@ -42,6 +83,7 @@ MODE_NAMES = {
     "l4": "L4 — Full Image / Block Stream",
 }
 
+# --- Downlink Frame Hardware Markers ---
 MARKER_ACK = 0xAC
 MARKER_L0_HEADER = 0x5B
 MARKER_L0_POINT = 0xBD
@@ -85,12 +127,13 @@ class AuraGroundUI:
         self.busy = False
         self.current_mode = None
 
-        # Стан каналів зв'язку
+        # --- Active Telemetry Data Structures ---
         self.cloud_x = []
         self.cloud_y = []
         self.cloud_score = []
         self.cloud_is_scored = True
 
+        # --- L2 Grid Matrices and Metrics ---
         self.heatmap = np.zeros((64, 64), dtype=np.float32)
         self.heatmap_rows = 64
         self.heatmap_cols = 64
@@ -101,6 +144,7 @@ class AuraGroundUI:
         self.l2_overlap_blocks = 0
         self.l2_landmark_hits = 0
 
+        # --- L3/L4 Target Reconstruction Frames ---
         self.roi_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
         self.l4_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
         self.roi_block_size = 16
@@ -110,9 +154,8 @@ class AuraGroundUI:
         self.l4_expected_blocks = 0
         self.l4_received_blocks = 0
         self.roi_threshold = None
-        self.roi_priority_mode = 0
 
-        # Низькорівневий парсер
+        # --- Low-Level Stream Parser States ---
         self.raw_expected = 0
         self.raw_buffer = bytearray()
         self.raw_block_col = 0
@@ -126,7 +169,7 @@ class AuraGroundUI:
         self.rx_bytes_total = 0
         self.frame_started_bytes = 0
 
-        # Посилання на графічні об'єкти Matplotlib
+        # --- Matplotlib Plot References ---
         self.scatter_cloud = None
         self.im_entropy = None
         self.im_image = None
@@ -153,7 +196,7 @@ class AuraGroundUI:
         self.connect_button = ttk.Button(top, text="Connect", command=self.toggle_connection, style="Connect.TButton")
         self.connect_button.pack(side="right")
 
-        # Основна панель команд
+        # --- Command and Request Panels ---
         controls = ttk.LabelFrame(self.root, text="Interactive Telemetry Request Panel", padding=10)
         controls.pack(fill="x", padx=10, pady=(0, 5))
 
@@ -163,14 +206,14 @@ class AuraGroundUI:
             btn.pack(side="left", padx=4, fill="x", expand=True)
             self.buttons[mode] = btn
 
-        # НОВА ПАНЕЛЬ: Динамічне керування порогом компресії (TTC Entropy Gate)
+        # --- On-Board Gating Array (Uplink Controls) ---
         gate_panel = ttk.LabelFrame(self.root, text="On-Board Science Gate Controller (TTC Command Array)", padding=10)
         gate_panel.pack(fill="x", padx=10, pady=(0, 10))
 
         ttk.Label(gate_panel, text="Shannon Entropy Compression Threshold:", font=("Helvetica", 10)).pack(side="left", padx=(5, 10))
         
         self.gate_slider = tk.Scale(gate_panel, from_=0.0, to=8.0, resolution=0.1, orient="horizontal", length=350, showvalue=True, font=("Helvetica", 9))
-        self.gate_slider.set(2.5) # Значення за замовчуванням
+        self.gate_slider.set(2.5) # Default baseline limit
         self.gate_slider.pack(side="left", padx=5)
 
         self.send_gate_button = ttk.Button(gate_panel, text="⟪ Transmit Gate Command", command=self.send_gate_command)
@@ -180,6 +223,7 @@ class AuraGroundUI:
         self.info_var = tk.StringVar(value="System Idle. Awaiting connection.")
         ttk.Label(self.root, textvariable=self.info_var, font=("Courier New", 10, "bold"), padding=(10, 0, 10, 8)).pack(fill="x")
 
+        # --- Core Window Multi-Display Partition ---
         main_paned = ttk.PanedWindow(self.root, orient="horizontal")
         main_paned.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -188,6 +232,7 @@ class AuraGroundUI:
         main_paned.add(left_side, weight=1)
         main_paned.add(right_side, weight=1)
 
+        # --- Left Side Multi-Plots ---
         self.fig_cloud, self.ax_cloud = plt.subplots(figsize=(5, 4))
         self.canvas_cloud = FigureCanvasTkAgg(self.fig_cloud, master=left_side)
         self.canvas_cloud.get_tk_widget().pack(fill="both", expand=True, side="top", pady=(0, 5))
@@ -196,6 +241,7 @@ class AuraGroundUI:
         self.canvas_entropy = FigureCanvasTkAgg(self.fig_entropy, master=left_side)
         self.canvas_entropy.get_tk_widget().pack(fill="both", expand=True, side="bottom")
 
+        # --- Right Wing Main Scientific Frame ---
         self.fig_image, self.ax_image = plt.subplots(figsize=(6, 8))
         self.canvas_image = FigureCanvasTkAgg(self.fig_image, master=right_side)
         self.canvas_image.get_tk_widget().pack(fill="both", expand=True)
@@ -204,26 +250,26 @@ class AuraGroundUI:
         self._bind_save_contexts()
 
     def _init_plots(self):
-        # Ініціалізація L0/L1 (Top Left)
+        # Top-Left Landmark Initialization
         self.ax_cloud.set_facecolor("#0b0c10")
         self.ax_cloud.set_xlim(0, IMG_WIDTH)
         self.ax_cloud.set_ylim(IMG_HEIGHT, 0)
         self.ax_cloud.set_title("AURA — L0/L1 Landmark Cloud View")
         self.ax_cloud.set_aspect("equal", adjustable="box")
 
-        # Ініціалізація L2 Entropy (Bottom Left)
+        # Bottom-Left Entropy Matrix Mapping
         self.im_entropy = self.ax_entropy.imshow(self.heatmap, cmap="jet", interpolation="nearest", vmin=0, vmax=8, extent=CAMERA_EXTENT, origin="upper")
         self.ax_entropy.set_title("AURA — L2 Full Entropy Map")
         self.ax_entropy.set_xlim(0, IMG_WIDTH)
         self.ax_entropy.set_ylim(IMG_HEIGHT, 0)
         self.ax_entropy.set_aspect("equal", adjustable="box")
         
-        # ФІКС ЗМІЩЕННЯ: Створюємо внутрішню вісь для colorbar без зсуву осей самого графіка
+        # Embedded colorbar via inset_axes to enforce left-border horizontal synchronization
         cax = inset_axes(self.ax_entropy, width="3%", height="70%", loc="center right", borderpad=-3.5)
         self.cbar_entropy = self.fig_entropy.colorbar(self.im_entropy, cax=cax)
         self.cbar_entropy.set_label("Shannon Entropy (bits/pixel)", rotation=270, labelpad=15)
 
-        # Ініціалізація L3/L4 Image Display (Right Wing)
+        # Right-Wing Main Raster Viewport
         self.im_image = self.ax_image.imshow(self.roi_frame, cmap="gray", vmin=0, vmax=255, interpolation="nearest", extent=CAMERA_EXTENT, origin="upper")
         self.ax_image.set_title("AURA — Main Right-Wing Science Frame Stream")
         self.ax_image.set_xlim(0, IMG_WIDTH)
@@ -235,7 +281,7 @@ class AuraGroundUI:
         self.canvas_image.draw()
 
     def _bind_save_contexts(self):
-        # Прив'язка натискання правої кнопки миші (Button-3) для контекстного експорту
+        # Binding Mouse Button-3 (Right Click) for 1020x1020 clean canvas exports
         self.canvas_cloud.get_tk_widget().bind("<Button-3>", lambda e: self._trigger_save_menu("cloud"))
         self.canvas_entropy.get_tk_widget().bind("<Button-3>", lambda e: self._trigger_save_menu("entropy"))
         self.canvas_image.get_tk_widget().bind("<Button-3>", lambda e: self._trigger_save_menu("image"))
@@ -244,6 +290,7 @@ class AuraGroundUI:
         state = "normal" if enabled and self.connected and not self.busy else "disabled"
         for btn in self.buttons.values():
             btn.configure(state=state)
+        self.send_gate_button.configure(state=state)
 
     def toggle_connection(self):
         if self.connected:
@@ -303,7 +350,10 @@ class AuraGroundUI:
 
                 payload = bytes(self.raw_buffer)
                 if self.parser_state in ("l0_points", "l1_points"):
-                    self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
+                    # Local arrays isolate packet compilation from background thread zapping
+                    local_x = []
+                    local_y = []
+                    local_score = []
 
                     if self.parser_state == "l0_points":
                         record_size = 3
@@ -311,23 +361,26 @@ class AuraGroundUI:
                             base = i * record_size
                             x = (payload[base] << 2) | (payload[base + 1] >> 6)
                             y = ((payload[base + 1] & 0x3F) << 4) | (payload[base + 2] >> 4)
-                            self.cloud_x.append(x)
-                            self.cloud_y.append(y)
-                            self.cloud_score.append(0)
-                        self.events.put(("l0_points_complete", None))
+                            local_x.append(x)
+                            local_y.append(y)
+                            local_score.append(0)
+                        self.events.put(("l0_points_complete", (local_x, local_y, local_score)))
                     else:
-                        # ФІКС L1: reserved[4] | X[10] | Y[10] | vector_angle[4] | intensity[4]
                         record_size = 4
                         for i in range(len(payload) // record_size):
                             base = i * record_size
+                            # FIX L1: Extract clean 32-bit register from tuple index [0]
                             word = struct.unpack(">I", payload[base:base + record_size])[0]
-                            x = (word >> 18) & 0x03FF
-                            y = (word >> 8) & 0x03FF
-                            angle = (word >> 4) & 0x0F  # Дістаємо вектор напрямку рельєфу
-                            self.cloud_x.append(x)
-                            self.cloud_y.append(y)
-                            self.cloud_score.append(angle * 17) # Масштабуємо 0..15 до 0..255 під палітру
-                        self.events.put(("l1_points_complete", None))
+                            
+                            # Bit allocation alignment matching Hello_AURA.c flight target
+                            x = (word >> 18) & 0x03FF  # Bits [27:18] -> 10 bits X
+                            y = (word >> 8) & 0x03FF   # Bits [17:8]  -> 10 bits Y
+                            angle = (word >> 4) & 0x0F  # Bits [7:4]   -> 4 bits local anisotropic vector
+                            
+                            local_x.append(x)
+                            local_y.append(y)
+                            local_score.append(angle * 17) # Scaling 0..15 range up to 0..255 for colour maps
+                        self.events.put(("l1_points_complete", (local_x, local_y, local_score)))
                 else:
                     block = np.frombuffer(payload, dtype=np.uint8).copy().reshape((self.raw_block_h, self.raw_block_w))
                     self.events.put(("image_block_complete", (self.raw_block_mode, self.raw_block_col, self.raw_block_row, block)))
@@ -354,7 +407,6 @@ class AuraGroundUI:
             if marker == MARKER_L0_HEADER:
                 del self.parser_buffer[:4]
                 self.current_mode = "l0"
-                self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
                 count = (word >> 12) & 0x0FFF
                 self.raw_expected = count * 3
                 self.parser_state = "l0_points"
@@ -364,7 +416,6 @@ class AuraGroundUI:
             if marker == MARKER_L1_HEADER:
                 del self.parser_buffer[:4]
                 self.current_mode = "l1"
-                self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
                 count = (word >> 12) & 0x0FFF
                 self.raw_expected = count * 4
                 self.parser_state = "l1_points"
@@ -377,8 +428,6 @@ class AuraGroundUI:
                 self.block_size = (word >> 16) & 0xFF
                 self.heatmap_cols = (word >> 8) & 0xFF
                 self.heatmap_rows = word & 0xFF
-                self.heatmap = np.zeros((self.heatmap_rows, self.heatmap_cols), dtype=np.float32)
-                self.heatmap_received_blocks = 0
                 self.events.put(("header_init", "l2"))
                 continue
 
@@ -499,7 +548,7 @@ class AuraGroundUI:
 
     def send_gate_command(self):
         if not self.connected: return
-        # Переводимо float (наприклад 2.5) у ціле число x100 (250) для фіксованої точки LEON3
+        # Scale input floating threshold down to fixed-point integer register for the LEON3 core
         gate_val_x100 = int(round(self.gate_slider.get() * 100))
         command = f"AURA GATE {gate_val_x100}\n".encode('ascii')
         
@@ -510,31 +559,36 @@ class AuraGroundUI:
             except OSError as exc:
                 self.status_var.set(f"Tx Error: {exc}")
 
-    def set_buttons_state(self, enabled: bool):
-        state = "normal" if enabled and self.connected and not self.busy else "disabled"
-        for btn in self.buttons.values():
-            btn.configure(state=state)
-        # Керуємо доступністю кнопки відправки команди динамічного порогу
-        self.send_gate_button.configure(state=state)
-
     def _draw_l0_live(self):
-        if self.scatter_cloud: self.scatter_cloud.remove()
-        self.scatter_cloud = self.ax_cloud.scatter(self.cloud_x, self.cloud_y, c="white", s=22, marker="+")
+        if self.scatter_cloud: 
+            self.scatter_cloud.remove()
+        if self.cloud_x and self.cloud_y:
+            self.scatter_cloud = self.ax_cloud.scatter(self.cloud_x, self.cloud_y, c="white", s=22, marker="+")
+        else:
+            self.scatter_cloud = self.ax_cloud.scatter([], [], c=[], s=22, marker="+")
         self.ax_cloud.set_title(f"AURA — L0 Coordinate-Only Cloud ({len(self.cloud_x)} features)")
-        self.canvas_cloud.draw_idle()
+        self.canvas_cloud.draw()
 
     def _draw_l1_live(self):
-        if self.scatter_cloud: self.scatter_cloud.remove()
-        self.scatter_cloud = self.ax_cloud.scatter(
-            self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=255, s=18, marker="+"
-        )
+        if self.scatter_cloud: 
+            self.scatter_cloud.remove()
+        if self.cloud_x and self.cloud_y:
+            self.scatter_cloud = self.ax_cloud.scatter(
+                self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=255, s=18, marker="+"
+            )
+        else:
+            self.scatter_cloud = self.ax_cloud.scatter([], [], c=[], s=18, marker="+")
         self.ax_cloud.set_title(f"AURA — L1 Landmark + Intensity Stream ({len(self.cloud_x)} points)")
-        self.canvas_cloud.draw_idle()
+        self.canvas_cloud.draw()
 
     def _draw_l2_live(self):
+        # Speed optimized local refresh bounding data coordinates only
         self.im_entropy.set_data(self.heatmap)
         self.ax_entropy.set_title(f"AURA — L2 Adaptive Grid ({self.heatmap_received_blocks} blocks)")
-        self.canvas_entropy.draw_idle()
+        
+        # High frequency blitting: update only the mapping artist to avoid colorbar lag blocks
+        self.ax_entropy.draw_artist(self.im_entropy)
+        self.fig_entropy.canvas.blit(self.ax_entropy.bbox)
 
     def _draw_l3_live(self):
         self.im_image.set_data(self.roi_frame)
@@ -569,18 +623,18 @@ class AuraGroundUI:
                     image.save(file_path, format="PNG")
                 return
 
-            export_fig = plt.figure(figsize=(10.2, 10.2), dpi=100)
-            export_ax = export_fig.add_axes([0, 0, 1, 1])
+            # Hardening figure background parameters to completely override default white flushing
+            export_fig = plt.figure(figsize=(10.2, 10.2), dpi=100, facecolor="#0b0c10")
+            export_ax = export_fig.add_axes([0, 0, 1, 1], facecolor="#0b0c10")
             export_ax.set_xlim(0, IMG_WIDTH)
             export_ax.set_ylim(IMG_HEIGHT, 0)
             export_ax.axis("off")
 
             if channel_type == "cloud":
-                export_ax.set_facecolor("#0b0c10")
                 if self.current_mode == "l0":
-                    export_ax.scatter(self.cloud_x, self.cloud_y, c="white", s=24, marker="+")
+                    export_ax.scatter(self.cloud_x, self.cloud_y, c="white", s=30, marker="+")
                 else:
-                    export_ax.scatter(self.cloud_x, self.cloud_y, c="cyan", s=20, marker="+")
+                    export_ax.scatter(self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=255, s=25, marker="+")
             elif channel_type == "entropy":
                 export_ax.imshow(
                     self.heatmap,
@@ -593,20 +647,20 @@ class AuraGroundUI:
                     aspect="auto",
                 )
 
-            export_fig.savefig(file_path, format="png", dpi=100, pad_inches=0)
+            # Explicit facecolor transport overrides unmanaged frame borders
+            export_fig.savefig(file_path, format="png", dpi=100, pad_inches=0, facecolor=export_fig.get_facecolor(), edgecolor='none')
             plt.close(export_fig)
         except Exception as exc:
             messagebox.showerror("AURA export error", f"Could not save {file_path}: {exc}")
 
     def _log_to_csv(self, current_mode_str, wire_bytes, saving_pct, ratio):
-        # Автоматичне створення каталогу logs за потреби
         os.makedirs(os.path.dirname(CSV_LOG_FILE), exist_ok=True)
         file_exists = os.path.isfile(CSV_LOG_FILE)
         try:
             with open(CSV_LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    # ФІКС: Додано колонку Entropy_Gate_Threshold строго коло поля Telemetry_Level
+                    # Registry columns trace dynamic uplinked gates next to telemetry modes
                     writer.writerow([
                         "Timestamp", 
                         "Telemetry_Level", 
@@ -627,10 +681,8 @@ class AuraGroundUI:
                 else:
                     detail = f"{self.l4_received_blocks} sequential blocks"
 
-                # Витягуємо поточне значення порогу зі слайдера Ground UI
                 current_gate_val = f"{self.gate_slider.get():.2f}"
 
-                # Запис повного інформаційного рядка телеметрії місії на диск
                 writer.writerow([
                     timestamp, 
                     current_mode_str.upper(), 
@@ -679,33 +731,37 @@ class AuraGroundUI:
                 elif kind == "header_init":
                     self.info_var.set(f"Streaming package for channel {payload.upper()} incoming...")
                     if payload == "l0" or payload == "l1":
-                        self.ax_cloud.clear()
+                        # Synchronous cleaning strictly in UI loop prevents async background thread race conditions
+                        self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
+                        if self.scatter_cloud:
+                            try: self.scatter_cloud.remove()
+                            except Exception: pass
+                            self.scatter_cloud = None
                         self.ax_cloud.set_facecolor("#0b0c10")
                         self.ax_cloud.set_xlim(0, IMG_WIDTH)
                         self.ax_cloud.set_ylim(IMG_HEIGHT, 0)
-                        self.scatter_cloud = None
+                        self.canvas_cloud.draw()
                     elif payload == "l2":
                         self.heatmap = np.zeros((self.heatmap_rows, self.heatmap_cols), dtype=np.float32)
+                        self.heatmap_received_blocks = 0
                         self._draw_l2_live()
 
-                elif kind == "l0_point":
-                    x, y = payload
-                    self.cloud_x.append(x)
-                    self.cloud_y.append(y)
-                    self.cloud_score.append(0)
-
-                elif kind == "l0_points_complete":
-                    self._draw_l0_live()
-
-                elif kind == "l1_points_complete":
-                    self._draw_l1_live()
+                elif kind == "l0_points_complete" or kind == "l1_points_complete":
+                    # Thread safe array delivery safely unpacked inside main layout thread
+                    self.cloud_x, self.cloud_y, self.cloud_score = payload
+                    if kind == "l0_points_complete":
+                        self._draw_l0_live()
+                    else:
+                        self._draw_l1_live()
 
                 elif kind == "l2_block":
                     r, c, val = payload
                     if r < self.heatmap_rows and c < self.heatmap_cols:
                         self.heatmap[r, c] = val
                         self.heatmap_received_blocks += 1
-                        if self.heatmap_received_blocks % 4 == 0: self._draw_l2_live()
+                        # Fast streaming update interval tracking progressive vertical scanning stripes
+                        if self.heatmap_received_blocks % 16 == 0: 
+                            self._draw_l2_live()
 
                 elif kind == "l2_compare":
                     self.status_var.set(
@@ -740,7 +796,11 @@ class AuraGroundUI:
 
                     if self.current_mode == "l0": self._draw_l0_live()
                     elif self.current_mode == "l1": self._draw_l1_live()
-                    elif self.current_mode == "l2": self._draw_l2_live()
+                    elif self.current_mode == "l2": 
+                        # Absolute hard draw verification routine on frame transmission completion
+                        self.im_entropy.set_data(self.heatmap)
+                        self.ax_entropy.set_title(f"AURA — L2 Adaptive Grid ({self.heatmap_received_blocks} blocks)")
+                        self.canvas_entropy.draw()
                     elif self.current_mode == "l3": self._draw_l3_live()
                     elif self.current_mode == "l4": self._draw_l4_live()
 
