@@ -599,13 +599,23 @@ class AuraGroundUI:
             messagebox.showerror("AURA export error", f"Could not save {file_path}: {exc}")
 
     def _log_to_csv(self, current_mode_str, wire_bytes, saving_pct, ratio):
+        # Автоматичне створення каталогу logs за потреби
         os.makedirs(os.path.dirname(CSV_LOG_FILE), exist_ok=True)
         file_exists = os.path.isfile(CSV_LOG_FILE)
         try:
             with open(CSV_LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    writer.writerow(["Timestamp", "Telemetry_Level", "Transmitted_Bytes_Wire", "Bandwidth_Savings_Pct", "Compression_Ratio_Factor", "Detail_Metrics"])
+                    # ФІКС: Додано колонку Entropy_Gate_Threshold строго коло поля Telemetry_Level
+                    writer.writerow([
+                        "Timestamp", 
+                        "Telemetry_Level", 
+                        "Entropy_Gate_Threshold", 
+                        "Transmitted_Bytes_Wire", 
+                        "Bandwidth_Savings_Pct", 
+                        "Compression_Ratio_Factor", 
+                        "Detail_Metrics"
+                    ])
                 
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                 if current_mode_str == "l0" or current_mode_str == "l1":
@@ -617,7 +627,19 @@ class AuraGroundUI:
                 else:
                     detail = f"{self.l4_received_blocks} sequential blocks"
 
-                writer.writerow([timestamp, current_mode_str.upper(), wire_bytes, f"{saving_pct:.2f}%", f"{ratio:.2f}x", detail])
+                # Витягуємо поточне значення порогу зі слайдера Ground UI
+                current_gate_val = f"{self.gate_slider.get():.2f}"
+
+                # Запис повного інформаційного рядка телеметрії місії на диск
+                writer.writerow([
+                    timestamp, 
+                    current_mode_str.upper(), 
+                    current_gate_val, 
+                    wire_bytes, 
+                    f"{saving_pct:.2f}%", 
+                    f"{ratio:.2f}x", 
+                    detail
+                ])
         except Exception as e:
             print(f"Mission Log Write Failure: {e}")
 
@@ -663,7 +685,6 @@ class AuraGroundUI:
                         self.ax_cloud.set_ylim(IMG_HEIGHT, 0)
                         self.scatter_cloud = None
                     elif payload == "l2":
-                        # ФІКС АДАПТИВНОСТІ: Автоматично перестворюємо матрицю під розмір сітки з лінка
                         self.heatmap = np.zeros((self.heatmap_rows, self.heatmap_cols), dtype=np.float32)
                         self._draw_l2_live()
 
@@ -672,7 +693,6 @@ class AuraGroundUI:
                     self.cloud_x.append(x)
                     self.cloud_y.append(y)
                     self.cloud_score.append(0)
-                    if len(self.cloud_x) % 2 == 0: self._draw_l0_live()
 
                 elif kind == "l0_points_complete":
                     self._draw_l0_live()
@@ -699,17 +719,16 @@ class AuraGroundUI:
                     if mode == "l3":
                         x0 = col * self.roi_block_size
                         y0 = row * self.roi_block_size
-                        bh, bw = block.shape # ФІКС: Точні розміри зрізу масиву NumPy
+                        bh, bw = block.shape
                         self.roi_frame[y0:y0+bh, x0:x0+bw] = block
                         self.roi_received_blocks += 1
                         self._draw_l3_live()
                     elif mode == "l4":
                         x0 = col * self.l4_block_size
                         y0 = row * self.l4_block_size
-                        bh, bw = block.shape # ФІКС: Точні розміри зрізу масиву NumPy
+                        bh, bw = block.shape
                         self.l4_frame[y0:y0+bh, x0:x0+bw] = block
                         self.l4_received_blocks += 1
-                        # ФІКС REAL-TIME: Оновлюємо кожний окремий блок, щоб бачити плавний хід зустрічних ліній
                         self._draw_l4_live()
 
                 elif kind == "frame_complete":
@@ -732,6 +751,7 @@ class AuraGroundUI:
                         f"Downlink Finished | wire={frame_bytes} B ({frame_bytes / 1024:.2f} KiB) | "
                         f"bandwidth_saved={saving:.2f}% | raw/wire={ratio:.2f}×{priority_detail}"
                     )
+                    
                     self._log_to_csv(self.current_mode, frame_bytes, saving, ratio)
 
         except Exception as e:
