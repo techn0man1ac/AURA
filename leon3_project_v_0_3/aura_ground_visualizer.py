@@ -153,14 +153,29 @@ class AuraGroundUI:
         self.connect_button = ttk.Button(top, text="Connect", command=self.toggle_connection, style="Connect.TButton")
         self.connect_button.pack(side="right")
 
+        # Основна панель команд
         controls = ttk.LabelFrame(self.root, text="Interactive Telemetry Request Panel", padding=10)
-        controls.pack(fill="x", padx=10, pady=(0, 10))
+        controls.pack(fill="x", padx=10, pady=(0, 5))
 
         self.buttons = {}
         for mode, label in [("l0", "L0 — Cloud"), ("l1", "L1 — Map"), ("l2", "L2 — Entropy"), ("l3", "L3 — ROI"), ("l4", "L4 — Full")]:
             btn = ttk.Button(controls, text=label, command=lambda m=mode: self.request_mode(m))
             btn.pack(side="left", padx=4, fill="x", expand=True)
             self.buttons[mode] = btn
+
+        # НОВА ПАНЕЛЬ: Динамічне керування порогом компресії (TTC Entropy Gate)
+        gate_panel = ttk.LabelFrame(self.root, text="On-Board Science Gate Controller (TTC Command Array)", padding=10)
+        gate_panel.pack(fill="x", padx=10, pady=(0, 10))
+
+        ttk.Label(gate_panel, text="Shannon Entropy Compression Threshold:", font=("Helvetica", 10)).pack(side="left", padx=(5, 10))
+        
+        self.gate_slider = tk.Scale(gate_panel, from_=0.0, to=8.0, resolution=0.1, orient="horizontal", length=350, showvalue=True, font=("Helvetica", 9))
+        self.gate_slider.set(2.5) # Значення за замовчуванням
+        self.gate_slider.pack(side="left", padx=5)
+
+        self.send_gate_button = ttk.Button(gate_panel, text="⟪ Transmit Gate Command", command=self.send_gate_command)
+        self.send_gate_button.pack(side="left", padx=15)
+        self.send_gate_button.configure(state="disabled")
 
         self.info_var = tk.StringVar(value="System Idle. Awaiting connection.")
         ttk.Label(self.root, textvariable=self.info_var, font=("Courier New", 10, "bold"), padding=(10, 0, 10, 8)).pack(fill="x")
@@ -173,7 +188,6 @@ class AuraGroundUI:
         main_paned.add(left_side, weight=1)
         main_paned.add(right_side, weight=1)
 
-        # Ліва сторона: два незалежних графіка
         self.fig_cloud, self.ax_cloud = plt.subplots(figsize=(5, 4))
         self.canvas_cloud = FigureCanvasTkAgg(self.fig_cloud, master=left_side)
         self.canvas_cloud.get_tk_widget().pack(fill="both", expand=True, side="top", pady=(0, 5))
@@ -182,7 +196,6 @@ class AuraGroundUI:
         self.canvas_entropy = FigureCanvasTkAgg(self.fig_entropy, master=left_side)
         self.canvas_entropy.get_tk_widget().pack(fill="both", expand=True, side="bottom")
 
-        # Права сторона: один великий графік на всю висоту
         self.fig_image, self.ax_image = plt.subplots(figsize=(6, 8))
         self.canvas_image = FigureCanvasTkAgg(self.fig_image, master=right_side)
         self.canvas_image.get_tk_widget().pack(fill="both", expand=True)
@@ -290,9 +303,7 @@ class AuraGroundUI:
 
                 payload = bytes(self.raw_buffer)
                 if self.parser_state in ("l0_points", "l1_points"):
-                    self.cloud_x = []
-                    self.cloud_y = []
-                    self.cloud_score = []
+                    self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
 
                     if self.parser_state == "l0_points":
                         record_size = 3
@@ -305,17 +316,17 @@ class AuraGroundUI:
                             self.cloud_score.append(0)
                         self.events.put(("l0_points_complete", None))
                     else:
-                        # L1 record: reserved[4] | X[10] | Y[10] | intensity[8] = 32 bits.
+                        # ФІКС L1: reserved[4] | X[10] | Y[10] | vector_angle[4] | intensity[4]
                         record_size = 4
                         for i in range(len(payload) // record_size):
                             base = i * record_size
                             word = struct.unpack(">I", payload[base:base + record_size])[0]
                             x = (word >> 18) & 0x03FF
                             y = (word >> 8) & 0x03FF
-                            intensity = word & 0xFF
+                            angle = (word >> 4) & 0x0F  # Дістаємо вектор напрямку рельєфу
                             self.cloud_x.append(x)
                             self.cloud_y.append(y)
-                            self.cloud_score.append(intensity)
+                            self.cloud_score.append(angle * 17) # Масштабуємо 0..15 до 0..255 під палітру
                         self.events.put(("l1_points_complete", None))
                 else:
                     block = np.frombuffer(payload, dtype=np.uint8).copy().reshape((self.raw_block_h, self.raw_block_w))
@@ -486,6 +497,26 @@ class AuraGroundUI:
         self.info_var.set(f"Request sent: {MODE_NAMES[mode]} — downlinking architecture...")
         self.set_buttons_state(False)
 
+    def send_gate_command(self):
+        if not self.connected: return
+        # Переводимо float (наприклад 2.5) у ціле число x100 (250) для фіксованої точки LEON3
+        gate_val_x100 = int(round(self.gate_slider.get() * 100))
+        command = f"AURA GATE {gate_val_x100}\n".encode('ascii')
+        
+        with self.sock_lock:
+            try:
+                self.sock.sendall(command)
+                self.info_var.set(f"TTC Telecommand Uplinked: Setting On-Board Entropy Gate to {self.gate_slider.get():.2f} bits/px")
+            except OSError as exc:
+                self.status_var.set(f"Tx Error: {exc}")
+
+    def set_buttons_state(self, enabled: bool):
+        state = "normal" if enabled and self.connected and not self.busy else "disabled"
+        for btn in self.buttons.values():
+            btn.configure(state=state)
+        # Керуємо доступністю кнопки відправки команди динамічного порогу
+        self.send_gate_button.configure(state=state)
+
     def _draw_l0_live(self):
         if self.scatter_cloud: self.scatter_cloud.remove()
         self.scatter_cloud = self.ax_cloud.scatter(self.cloud_x, self.cloud_y, c="white", s=22, marker="+")
@@ -593,7 +624,7 @@ class AuraGroundUI:
     def _process_events(self):
         try:
             burst_counter = 0
-            while burst_counter < 64:
+            while burst_counter < 2000:
                 try:
                     kind, payload = self.events.get_nowait()
                     burst_counter += 1
@@ -618,7 +649,10 @@ class AuraGroundUI:
                     self.set_buttons_state(False)
 
                 elif kind == "ack":
-                    self.status_var.set(f"LEON3 Target ACK: Hardware Mode {ACK_NAMES.get(payload, payload)} active")
+                    if payload == 255:
+                        self.status_var.set("LEON3 Dynamic Registry Update: Entropy Gate Locked Successfully!")
+                    else:
+                        self.status_var.set(f"LEON3 Target ACK: Hardware Mode {ACK_NAMES.get(payload, payload)} active")
 
                 elif kind == "header_init":
                     self.info_var.set(f"Streaming package for channel {payload.upper()} incoming...")
@@ -629,7 +663,7 @@ class AuraGroundUI:
                         self.ax_cloud.set_ylim(IMG_HEIGHT, 0)
                         self.scatter_cloud = None
                     elif payload == "l2":
-                        # ФІКС: Перестворюємо нульову матрицю під реальний розмір сітки з заголовка
+                        # ФІКС АДАПТИВНОСТІ: Автоматично перестворюємо матрицю під розмір сітки з лінка
                         self.heatmap = np.zeros((self.heatmap_rows, self.heatmap_cols), dtype=np.float32)
                         self._draw_l2_live()
 
@@ -638,6 +672,7 @@ class AuraGroundUI:
                     self.cloud_x.append(x)
                     self.cloud_y.append(y)
                     self.cloud_score.append(0)
+                    if len(self.cloud_x) % 2 == 0: self._draw_l0_live()
 
                 elif kind == "l0_points_complete":
                     self._draw_l0_live()
@@ -664,18 +699,17 @@ class AuraGroundUI:
                     if mode == "l3":
                         x0 = col * self.roi_block_size
                         y0 = row * self.roi_block_size
-                        bh, bw = block.shape
+                        bh, bw = block.shape # ФІКС: Точні розміри зрізу масиву NumPy
                         self.roi_frame[y0:y0+bh, x0:x0+bw] = block
                         self.roi_received_blocks += 1
                         self._draw_l3_live()
                     elif mode == "l4":
                         x0 = col * self.l4_block_size
                         y0 = row * self.l4_block_size
-                        bh, bw = block.shape
+                        bh, bw = block.shape # ФІКС: Точні розміри зрізу масиву NumPy
                         self.l4_frame[y0:y0+bh, x0:x0+bw] = block
                         self.l4_received_blocks += 1
-                        # ФІКС: Оновлюємо кожний перший блок (прибираємо % 4),
-                        # щоб бачити плавний рух зустрічних вертикальних смуг
+                        # ФІКС REAL-TIME: Оновлюємо кожний окремий блок, щоб бачити плавний хід зустрічних ліній
                         self._draw_l4_live()
 
                 elif kind == "frame_complete":
@@ -698,7 +732,6 @@ class AuraGroundUI:
                         f"Downlink Finished | wire={frame_bytes} B ({frame_bytes / 1024:.2f} KiB) | "
                         f"bandwidth_saved={saving:.2f}% | raw/wire={ratio:.2f}×{priority_detail}"
                     )
-                    
                     self._log_to_csv(self.current_mode, frame_bytes, saving, ratio)
 
         except Exception as e:
