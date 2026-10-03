@@ -1,7 +1,7 @@
 # AURA: Autonomous Unsupervised Feature-Tracking for Real-Time Deep-Space Navigation
 An ultra-lightweight, hardware-agnostic embedded vision subsystem designed for real-time edge computing, autonomous object mapping, and telemetry visualization. 
 
-![AURA V0.3 simple visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/leon3_project_v_0_3/AURA_GrndSeg_Screenshot.png)
+![AURA_Simple_Idea visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_Simple_Idea.png)
 
 AURA is engineered specifically within the [**ESA OSIP**](https://www.esa.int/Enabling_Support/Preparing_for_the_Future/Discovery_and_Preparation/The_Open_Space_Innovation_Platform_OSIP) framework as a direct software solution to meet the core objectives of the **Hera Extended Mission Phase (Autonomous Software Experiments on Hera)**. Developed for execution on the spacecraft's second processor core (Core 1), the system operates within a protected sandbox environment alongside flight-critical systems, achieving **Technology Readiness Level 4 (TRL 4)** validation.
 
@@ -114,6 +114,9 @@ renode .\script.resc
 ![LEON3 Remode Emulations screenshot](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/LEON3_Remode_Emulations.png)
 
 ### Step 3: Initialize the Ground Segment Visualizer
+
+![AURA V0.3 Ground Station Screenshot](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/leon3_project_v_0_3/AURA_GrndSeg_Screenshot.png)
+
 Once the emulation starts running and the virtual spacecraft begins processing frames, open a separate terminal window at **`C:\Projects\AURA-main\`** and launch the telemetry live decoder to bind to the active stream:
 
 ```powershell
