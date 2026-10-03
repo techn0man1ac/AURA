@@ -1,7 +1,7 @@
 # AURA: Autonomous Unsupervised Feature-Tracking for Real-Time Deep-Space Navigation
 An ultra-lightweight, hardware-agnostic embedded vision subsystem designed for real-time edge computing, autonomous object mapping, and telemetry visualization. 
 
-![AURA simple visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_simple.png)
+![AURA V0.3 simple visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/leon3_project_v_0_3/AURA_GrndSeg_Screenshot.png)
 
 AURA is engineered specifically within the [**ESA OSIP**](https://www.esa.int/Enabling_Support/Preparing_for_the_Future/Discovery_and_Preparation/The_Open_Space_Innovation_Platform_OSIP) framework as a direct software solution to meet the core objectives of the **Hera Extended Mission Phase (Autonomous Software Experiments on Hera)**. Developed for execution on the spacecraft's second processor core (Core 1), the system operates within a protected sandbox environment alongside flight-critical systems, achieving **Technology Readiness Level 4 (TRL 4)** validation.
 
@@ -60,10 +60,10 @@ Data serialization circumvents human-readable ASCII or string parsing inside the
 
 ---
 
-## 📂 V0.2 Repository Structure (work variant)
+## 📂 V0.3 Repository Structure (work variant)
 * `Hello_AURA.c` — The standalone core flight software application executing the fixed-point block entropy pipeline.
 * `experiment_test.elf` — The final compiled space-grade executable binary containing embedded image matrices.
-* `image.bin` — The raw 8-bit monochrome binary matrix extracted for hardware memory direct mapping (`0x40600000`). **Sourced from ESA's official `AFC images.tar.gz` dataset.**
+* `image.bin` — The raw 8-bit monochrome binary matrix extracted for hardware memory direct mapping (`0x40600000`). **Please move the "image.bin" file from the root directory to the folder containing the script.**
 * `leon3.repl` — The Renode hardware platform description file enforcing the exact 16 MB memory map layout.
 * `script.resc` — The automation deployment script establishing the socket bindings and CPU clock performance.
 * `telemetry_live_visualizer.py` — The Ground Segment analytics visualizer decoding binary masks into a real-time heatmap.
@@ -98,10 +98,9 @@ renode --version
 *All command line steps below assume that your terminal is opened and executing from the project root directory (`cd C:\Projects\AURA-main\`).*
 
 ### Step 1: Toolchain Cross-Compilation
-To recompile the flight software from source using the official Aeroflex Gaisler BCC2 cross-compiler toolchain, execute the following multi-stage compilation pipeline within a Windows PowerShell terminal opened at **`C:\Projects\AURA-main\`**:
+To recompile the flight software from source using the official Aeroflex Gaisler BCC2 cross-compiler toolchain, execute the following multi-stage compilation pipeline within a Windows PowerShell terminal opened at **`C:\Projects\AURA-main\`**. Compiling V0.3 and linking the standalone AURA firmware directly into an ELF image with memory alignment:
 
 ```powershell
-# Compiling and linking the standalone AURA firmware directly into an ELF image with memory alignment
 & "C:\Projects\bcc-2.2.3-gcc-mingw64\bcc-2.2.3-gcc\bin\sparc-gaisler-elf-gcc.exe" -O2 -g Hello_AURA.c -o experiment_test.elf "-Wl,-Ttext=0x40000000" "-Wl,-z,muldefs" -lgcc
 ```
 
@@ -120,8 +119,6 @@ Once the emulation starts running and the virtual spacecraft begins processing f
 ```powershell
 python .\telemetry_live_visualizer.py
 ```
-
-![Screenshot of AURA V0.2](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/Figure_1.png)
 
 Upon connection, the onboard application will continue processing the 1020x1020 image grids, routing the compiled binary stream dynamically over the loopback interface (`127.0.0.1:12345`) to render a real-time mathematical heatmap of the asteroid terrain in the Ground Segment visualizer window.
 
