@@ -182,7 +182,7 @@ Upon socket handshake, the Ground Station begins receiving packed telemetry word
 
 ---
 
-## 📂 Repository Structure & Mission Modules(V0.3 work variant)
+## 📂 Repository Structure & Mission Modules
 
 * `Hello_AURA.c` — Standalone core flight application executing the fixed-point block entropy pipeline and deterministic landmark extractor.
 * `leon3.repl` — Renode platform description enforcing the physical 16 MB memory-mapped boundary.
