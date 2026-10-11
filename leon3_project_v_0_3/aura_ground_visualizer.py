@@ -1,5 +1,7 @@
 """
 AURA Ground Segment Telemetry Decoder & Console V0.3
+https://github.com/techn0man1ac/TelegramAIChatbot
+By Serhii Trush, 2026, MIT License.
 ===================================================
 
 Supported Multi-Channel Downlink Protocol Layout:
