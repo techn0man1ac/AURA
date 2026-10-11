@@ -1,6 +1,6 @@
 /*
     AURA LEON3 Firmware V0.3
-    https://github.com/techn0man1ac/TelegramAIChatbot
+    https://github.com/techn0man1ac/AURA
     By Serhii Trush, 2026, MIT License.
 
    Fixed 1020x1020, 8-bit grayscale image.
