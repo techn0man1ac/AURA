@@ -188,7 +188,7 @@ Upon socket handshake, the Ground Station begins receiving packed telemetry word
 * `leon3.repl` — Renode platform description enforcing the physical 16 MB memory-mapped boundary.
 * `script.resc` — Automated deployment and socket bridging script for Renode.
 * `telemetry_live_visualizer.py` — Ground Segment mission console decoding incoming binary packet streams into interactive mathematical heatmaps and point clouds.
-* `image.bin` — Raw 8-bit monochromatic calibration frame mapped at `0x40600000`. Please move the "image.bin" from the repository root to the V0.3 catalog. This file was created specifically for testing purposes, based on a [NASA file](https://en.wikipedia.org/wiki/Dimorphos#/media/File:Dimorphos_North-Up_Image_Composition_reduced_bloom.png).
+* `image.bin` — Raw 8-bit monochromatic calibration frame mapped at `0x40600000`. This file was created specifically for testing purposes, based on a [NASA file](https://en.wikipedia.org/wiki/Dimorphos#/media/File:Dimorphos_North-Up_Image_Composition_reduced_bloom.png).
 
 > **Note on Mission-Specific Extensions:**  
 > This open-source repository hosts the standalone core algorithm and generic emulation pipeline. Tailored flight stubs and platform drivers interfacing with official mission APIs (such as the ESA Hera Payload Interface and PUS Service 230 packet wrappers under ESA OSIP Campaign `I-2026-13019`) are maintained in segregated flight branches in compliance with platform dissemination rules.
