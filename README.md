@@ -6,6 +6,7 @@ An ultra-lightweight, deterministic embedded vision framework designed for real-
 AURA addresses severe communication bottlenecks (intermittent downlinks, round-trip signal delays reaching tens of minutes) and strict avionics resource constraints during autonomous proximity operations near uncharted celestial bodies. Validated at **Technology Readiness Level 4 (TRL 4)**, the architecture operates within a deterministic, bare-metal memory sandbox compliant with **ECSS Category D** software engineering standards.
 
 [![TRL](https://img.shields.io/badge/TRL-4-blue.svg)](#-building-and-running-the-simulation)
+[![ECSS](https://img.shields.io/badge/ECSS--E--ST--40C-Category%20D-blue.svg)](#-project-evolution)
 [![Architecture](https://img.shields.io/badge/Target-LEON3%20%2F%20SPARC%20V8-informational.svg)](#-technical-architecture--aerospace-constraints)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
