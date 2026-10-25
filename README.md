@@ -48,10 +48,12 @@ Validated across high-resolution deep-space small-body datasets, AURA delivers a
 The firmware is engineered to comply with strict space avionics specifications (representative of the **Cobham Gaisler GR712RC Dual-Core LEON3 SPARC V8** architecture executing at **250 MIPS**):
 
 * **Deterministic Static Sandbox:** Confined within a strict **16 MB RAM partition** (`0x3FFF0000` to `0x40FF0000`). Dynamic memory management (`malloc`, `free`, `calloc`) is entirely omitted.
+
+![AURA log2 Q8 Visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/log2_q8_visualization_en.png)
+
 * **Zero Floating-Point Unit (FPU) Overhead:** Fixed-point integer mathematical models completely replace standard math routines (`float`, `double`, `log2f`). Base-2 logarithms are evaluated via a precomputed **Q8-format lookup table (`log2_q8[257]`)**, executing in single-cycle integer arithmetic.
 * **Hardware Trap Mitigation (SPARC Trap 0x07):** Multidimensional telemetry words are serialized byte-by-byte via register bit-shifts before hardware interface flushing, completely preventing unaligned word memory access anomalies (**Data Access Alignment Traps**).
 * **O(N) Cache Optimization:** Histogram binning incorporates an active-bin tracking stack, bounding clearing operations to $O(N)$ complexity (where $N$ is the number of active grayscale levels per block) and maintaining internal CPU cache integrity.
-
 ---
 
 ## 🧬 Project Evolution
