@@ -19,6 +19,10 @@ Deep-space exploration missions (such as asteroid rendezvous, comet flybys, and 
 AURA inverts traditional pixel streaming by implementing an **Information-Theoretic Perception Paradigm**:
 > **"Information should be prioritized according to its mathematical and physical value, rather than transmitting uniform raw pixels."**
 
+![AURA V0.3 Progressive Downlink Stream demo](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_V0_3_Progressive_Downlink_Stream.png)
+
+Short [idea](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_V0_3_Progressive_Downlink_Stream.gif) demo☝️.
+
 ### Core Capabilities:
 1. **Autonomous Optical Edge Gating:** Directly evaluates local informational density via integer Shannon entropy, stripping 100% of empty vacuum background on-board.
 2. **Directional Landmark Tracking:** Extracts structural surface vertices (crater rims, boulders, limbs) with localized 4-bit anisotropic gradient vectors, ready for direct ingestion into autonomous GNC (Guidance, Navigation, and Control) and Visual Odometry loops.
