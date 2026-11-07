@@ -208,7 +208,7 @@ static unsigned int contrast_score_at(int x, int y, unsigned char *angle_out)
   int p_left  = img[y * IMG_WIDTH + (x - 8)];
   int p_right = img[y * IMG_WIDTH + (x + 8)];
 
-  /* КРОК 1: Зберігаємо знаки дельт (+/-) для визначення повного кола 360° */
+  /* STEP 1: Keep the delta signs (+/-) to determine a full circle of 360° */
   int dv = p_top - p_down;
   int dh = p_left - p_right;
 
@@ -220,13 +220,13 @@ static unsigned int contrast_score_at(int x, int y, unsigned char *angle_out)
     if (score == 0) {
       *angle_out = 0;
     } else {
-      /* КРОК 2: Поворот на +90° у вектор дотичної: T_x = -dv, T_y = dh */
+      /* STEP 2: Rotate by +90° about the tangent vector: T_x = -dv, T_y = dh */
       int tx = -dv;
       int ty = dh;
       unsigned int atx = abs_int(tx);
       unsigned int aty = abs_int(ty);
 
-      /* КРОК 3: Визначення октанта (сегмента 45°) за квадрантами знаків */
+      /* STEP 3: Determining the octant (45° segment) based on the quadrants of the signs */
       int oct;
       if (tx >= 0 && ty >= 0) {
         oct = (atx >= aty) ? 0 : 1;
@@ -238,7 +238,7 @@ static unsigned int contrast_score_at(int x, int y, unsigned char *angle_out)
         oct = (aty >= atx) ? 6 : 7;
       }
 
-      /* КРОК 4: Поділ октанта навпіл на сектори 22.5° через tan(22.5°) ~ 414/1000 */
+      /* STEP 4: Divide the octant in half into 22.5° sectors using tan(22.5°) ~ 414/1000 */
       int sub;
       if ((oct & 1) == 0) {
         sub = (aty * 1000U >= atx * 414U) ? 1 : 0;
@@ -246,7 +246,7 @@ static unsigned int contrast_score_at(int x, int y, unsigned char *angle_out)
         sub = (atx * 1000U <= aty * 414U) ? 1 : 0;
       }
 
-      /* Підсумковий 4-бітний сектор дотичної (0..15) */
+      /* Final 4-bit tangent sector (0..15) */
       *angle_out = (unsigned char)((oct * 2 + sub) & 0x0FU);
     }
   }
