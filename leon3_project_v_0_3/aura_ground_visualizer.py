@@ -1,42 +1,51 @@
 """
-AURA Ground Segment Telemetry Decoder & Console V0.3
-https://github.com/techn0man1ac/AURA
-By Serhii Trush, 2026, MIT License..
-===================================================
+========================================================================================
+AURA Ground Segment Telemetry Decoder & Mission Console
+Repository: https://github.com/techn0man1ac/AURA
+Author:     Serhii Trush, 2026 (MIT License)
+========================================================================================
 
-Supported Multi-Channel Downlink Protocol Layout:
--------------------------------------------------
-All structured packets arrive big-endian, packed into 32-bit registers (uint32) 
-and flushed over the serial/socket link byte-by-byte to prevent unaligned 
-Data Access Traps on space-grade SPARC architectures.
+ARCHITECTURAL SPECIFICATION & PROTOCOL LAYOUT:
+----------------------------------------------
+All structured telemetry frames arrive big-endian, encapsulated into 32-bit registers 
+(uint32) and flushed across the physical or emulated loopback socket byte-by-byte. 
+This serial transmission pattern prevents unaligned bus memory faults (SPARC Trap 0x07) 
+on radiation-hardened spaceborne processors like the Cobham Gaisler GR712RC (LEON3).
 
-1. L0 / L1 Landmark Clouds (Markers 0x5B, 0xB1):
-   - L0 Layer: Packs 10-bit X and 10-bit Y coordinate indices into sequential 
-     3-byte records, completely cutting padding and score overhead.
-   - L1 Layer: Packs 10-bit X, 10-bit Y, a 4-bit edge vector direction angle, 
-     and a 4-bit pixel intensity into strict 4-byte packed words.
+1. L0 / L1 Landmark Subsystem (Sync Markers 0x5B, 0xB1):
+   - L0 Layer (Ultra-Sparse Anchor Cloud):
+     Transmits 10-bit X and 10-bit Y coordinate pairs packed into contiguous 3-byte
+     records (20 bits effective, 4 bits padding). Bypasses score/intensity overhead 
+     to provide critical silhouette anchors during razor-thin DSN radio passes (99.98% savings).
+   - L1 Layer (Directional Topological Descriptors):
+     Transmits 32-bit registers per landmark containing:
+     [Bits 27:18] -> 10-bit X Coordinate (0..1019 px).
+     [Bits 17:8]  -> 10-bit Y Coordinate (0..1019 px).
+     [Bits 7:4]   -> 4-bit Edge-Tangent Vector Orientation (16 sectors, 22.5 deg each).
+     [Bits 3:0]   -> 4-bit Quantized Luminance Intensity (0..15).
+     Renders as high-contrast anchor dots with directional tangent line segments (whiskers).
 
-2. L2 Shannon Entropy Matrix (Marker 0xD0, 0xD1):
-   - Streams an adaptive 64x64 data density map where every block payload word 
-     contains: [Marker: 8-bit] | [Col_Idx: 8-bit] | [Row_Idx: 8-bit] | [Entropy_x10: 8-bit].
-   - Followed by automated on-board cross-validation benchmarks:
-     * MARKER_L2_COMPARE_BLOCKS (0xD7) - Top-10% highest entropy blocks.
+2. L2 Shannon Entropy Topography (Sync Markers 0xD0, 0xD1):
+   - Streams an adaptive 64x64 block information density map (typically 16x16 pixel tiles).
+     Each telemetry word packs: [0xD1] | [Col: 8-bit] | [Row: 8-bit] | [Entropy_x10: 8-bit].
+   - Concludes with onboard cross-validation diagnostic benchmarks:
+     * MARKER_L2_COMPARE_BLOCKS (0xD7) - Top-10% highest entropy block volume.
      * MARKER_L2_COMPARE_POINTS (0xD8) - Landmark-to-block geometric overlaps.
-     * MARKER_L2_COMPARE_HITS   (0xD9) - Landmark hits matching the high-entropy mask.
+     * MARKER_L2_COMPARE_HITS   (0xD9) - Physical landmarks residing in top-entropy blocks.
 
-3. L3 / L4 Raster Graphics Core (Markers 0xD3, 0xC0):
-   - L3 Gated ROI Mode: Progressively downlinks informative surface segments 
-     derived via the logical union (A U B) of landmark and entropy structures. 
-     Blocks are prioritized on-board and sorted highest-entropy first.
-   - L4 Raster Mode: Progressive frame validation layer streaming raw 16x16 
-     pixel matrices using a bilinear counter-directional vertical scanning pattern 
-     moving from the frame margins simultaneously towards the image center.
+3. L3 / L4 Raster Graphics Engine (Sync Markers 0xD3, 0xC0):
+   - L3 Gated Sparse ROI: Progressively reconstructs surface segments isolated via the 
+     logical union (A ∪ B) of dilated landmarks and high-entropy regions. Transmitted in 
+     linear Bucket-Sorted order (highest entropy first) so science data arrives even if 
+     the transmission window terminates abruptly.
+   - L4 Full Image Scan: Uncompressed baseline verification raster. Progressively streams 
+     paired columns converging from the frame margins inward to the center (Bilateral 
+     Opposing Scan), allowing Ground Optical Navigation to stabilize the target silhouette instantly.
 
-Uplink Telecommands (TTC Command Array):
-----------------------------------------
-- "AURA L0\n" up to "AURA L4\n" -> Triggers immediate execution thread on-board.
-- "AURA GATE <val_x100>\n"      -> Remotely rewrites the spacecraft's active 
-                                   Shannon filtering threshold register on the fly.
+4. Closed-Loop Telecommand Array (TTC Uplink):
+   - "AURA L0\n" .. "AURA L4\n" -> Commands spacecraft to switch active downlink stream.
+   - "AURA GATE <val_x100>\n"   -> Overrides the active onboard Shannon entropy threshold.
+========================================================================================
 """
 
 import queue
@@ -57,18 +66,23 @@ except ImportError:
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.collections import LineCollection
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-# --- Network and Spatial Payload Constraints ---
-HOST = "127.0.0.1"
-PORT = 12345
-IMG_WIDTH = 1020
-IMG_HEIGHT = 1020
-RAW_IMAGE_BYTES = IMG_WIDTH * IMG_HEIGHT
+# ======================================================================================
+# NETWORK & SENSOR CONSTRAINTS
+# ======================================================================================
+HOST = "127.0.0.1"                     # Localhost TCP port for Renode / QEMU emulator
+PORT = 12345                           # UART forwarded loopback socket port
+IMG_WIDTH = 1020                       # Sensor matrix width (Hera AFC camera standard)
+IMG_HEIGHT = 1020                      # Sensor matrix height
+RAW_IMAGE_BYTES = IMG_WIDTH * IMG_HEIGHT  # Uncompressed 8-bit monochrome baseline (1,040,400 B)
 CAMERA_EXTENT = (0, IMG_WIDTH, IMG_HEIGHT, 0)
 CSV_LOG_FILE = os.path.join("logs", "aura_telemetry_log.csv")
 
-# --- Uplink Telecommand Byte Sequences (TTC) ---
+# ======================================================================================
+# TELECOMMAND (TTC) STRING SEQUENCES
+# ======================================================================================
 MODE_COMMANDS = {
     "l0": b"AURA L0\n",
     "l1": b"AURA L1\n",
@@ -79,46 +93,54 @@ MODE_COMMANDS = {
 
 MODE_NAMES = {
     "l0": "L0 — Top-100 Landmark Cloud (X,Y only)",
-    "l1": "L1 — Top-1000 Landmark Map (X,Y + intensity)",
-    "l2": "L2 — Full Adaptive Entropy Map",
-    "l3": "L3 — Sparse ROI Image",
-    "l4": "L4 — Full Image / Block Stream",
+    "l1": "L1 — Top-1000 Directional Map (X,Y + Tangent Vectors)",
+    "l2": "L2 — Full Adaptive Shannon Entropy Map",
+    "l3": "L3 — Sparse ROI Image (Union A ∪ B)",
+    "l4": "L4 — Full Image / Bilateral Raster Stream",
 }
 
-# --- Downlink Frame Hardware Markers ---
-MARKER_ACK = 0xAC
-MARKER_L0_HEADER = 0x5B
-MARKER_L0_POINT = 0xBD
-MARKER_L1_HEADER = 0xB1
-MARKER_L2_HEADER = 0xD0
-MARKER_L2_ENTROPY = 0xD1
-MARKER_L2_COUNT = 0xD2
-MARKER_L2_COMPARE_BLOCKS = 0xD7
-MARKER_L2_COMPARE_POINTS = 0xD8
-MARKER_L2_COMPARE_HITS = 0xD9
-MARKER_L3_HEADER = 0xD3
-MARKER_L3_META = 0xD4
-MARKER_L3_BLOCK = 0xD5
-MARKER_L3_COUNT = 0xD6
-MARKER_FULL_HEADER = 0xC0
-MARKER_FULL_BLOCK = 0xC3
-MARKER_END = 0xFE
+# ======================================================================================
+# DOWNLINK HARDWARE PROTOCOL MARKERS (MATCHING Hello_AURA.c)
+# ======================================================================================
+MARKER_ACK               = 0xAC  # Telecommand acknowledgment token
+MARKER_L0_HEADER         = 0x5B  # L0 Ultra-Sparse Landmark Cloud start token
+MARKER_L0_POINT          = 0xBD  # L0 Individual coordinate point record
+MARKER_L1_HEADER         = 0xB1  # L1 Directional Landmark Map start token
+MARKER_L2_HEADER         = 0xD0  # L2 Shannon Entropy Grid configuration header
+MARKER_L2_ENTROPY        = 0xD1  # L2 Cell entropy payload packet
+MARKER_L2_COUNT          = 0xD2  # L2 Total grid cell count metadata
+MARKER_L2_COMPARE_BLOCKS = 0xD7  # Diagnostic: Top-10% entropy block volume
+MARKER_L2_COMPARE_POINTS = 0xD8  # Diagnostic: Landmark-to-block geometric overlaps
+MARKER_L2_COMPARE_HITS   = 0xD9  # Diagnostic: Physical landmarks inside top entropy
+MARKER_L3_HEADER         = 0xD3  # L3 Sparse ROI image transmission header
+MARKER_L3_META           = 0xD4  # L3 Active gating threshold and priority metadata
+MARKER_L3_BLOCK          = 0xD5  # L3 ROI sub-block pixel packet header
+MARKER_L3_COUNT          = 0xD6  # L3 Total transmitted ROI block volume
+MARKER_FULL_HEADER       = 0xC0  # L4 Full Raster verification stream header
+MARKER_FULL_BLOCK        = 0xC3  # L4 Raster block pixel array header
+MARKER_END               = 0xFE  # Frame transmission termination trailer
 
 ACK_NAMES = {
-    10: "L0 TOP-100",
-    11: "L1 TOP-1000 (X,Y + intensity)",
-    12: "L2 FULL ENTROPY",
-    13: "L3 SPARSE ROI",
-    14: "L4 FULL FRAME STREAM",
+    10: "L0 TOP-100 CLOUD",
+    11: "L1 TOP-1000 VECTOR MAP",
+    12: "L2 FULL ENTROPY GRID",
+    13: "L3 SPARSE ROI FRAME",
+    14: "L4 FULL RASTER STREAM",
 }
 
+
 class AuraGroundUI:
+    """
+    Mission Ground Control Console GUI.
+    Manages socket reception, stream parsing, live vector plotting, and TTC commanding.
+    """
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AURA V0.3 — Ground Segment / Information-First Telemetry Console")
+        self.root.title("AURA Ground Segment — Real-Time Telemetry & Telecommand Console")
         self.root.geometry("1500x950")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        # Threading and network attributes
         self.sock = None
         self.sock_lock = threading.Lock()
         self.receiver_thread = None
@@ -129,13 +151,14 @@ class AuraGroundUI:
         self.busy = False
         self.current_mode = None
 
-        # --- Active Telemetry Data Structures ---
+        # --- Active Landmark Geometry & Vector Structures ---
         self.cloud_x = []
         self.cloud_y = []
-        self.cloud_score = []
-        self.cloud_is_scored = True
+        self.cloud_angles = []      # 4-bit edge-tangent orientation angle (0..15 sectors)
+        self.cloud_intensity = []   # 4-bit pixel luminance (0..255 scaled)
+        self.vector_collection = None  # Matplotlib LineCollection handle for fast vector rendering
 
-        # --- L2 Grid Matrices and Metrics ---
+        # --- L2 Shannon Entropy Matrices ---
         self.heatmap = np.zeros((64, 64), dtype=np.float32)
         self.heatmap_rows = 64
         self.heatmap_cols = 64
@@ -146,7 +169,7 @@ class AuraGroundUI:
         self.l2_overlap_blocks = 0
         self.l2_landmark_hits = 0
 
-        # --- L3/L4 Target Reconstruction Frames ---
+        # --- L3/L4 Surface Reconstruction Buffers ---
         self.roi_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
         self.l4_frame = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.uint8)
         self.roi_block_size = 16
@@ -157,7 +180,7 @@ class AuraGroundUI:
         self.l4_received_blocks = 0
         self.roi_threshold = None
 
-        # --- Low-Level Stream Parser States ---
+        # --- Low-Level Stream Parser State Machine ---
         self.raw_expected = 0
         self.raw_buffer = bytearray()
         self.raw_block_col = 0
@@ -171,7 +194,7 @@ class AuraGroundUI:
         self.rx_bytes_total = 0
         self.frame_started_bytes = 0
 
-        # --- Matplotlib Plot References ---
+        # --- Matplotlib Plot Artist Handles ---
         self.scatter_cloud = None
         self.im_entropy = None
         self.im_image = None
@@ -188,34 +211,35 @@ class AuraGroundUI:
         self.style.configure("Disconnect.TButton", font=("Helvetica", 10, "bold"))
 
     def _build_ui(self):
+        """Constructs layout panels, TTC command buttons, interactive sliders, and plots."""
         top = ttk.Frame(self.root, padding=10)
         top.pack(fill="x")
 
-        ttk.Label(top, text="AURA Ground Segment Console V0.3", font=("Helvetica", 16, "bold")).pack(side="left", padx=(0, 18))
+        ttk.Label(top, text="AURA Ground Segment Console", font=("Helvetica", 16, "bold")).pack(side="left", padx=(0, 18))
         self.status_var = tk.StringVar(value="Initializing connection to Renode LEON3 core...")
         ttk.Label(top, textvariable=self.status_var, font=("Helvetica", 10, "italic")).pack(side="left")
 
         self.connect_button = ttk.Button(top, text="Connect", command=self.toggle_connection, style="Connect.TButton")
         self.connect_button.pack(side="right")
 
-        # --- Command and Request Panels ---
+        # Telemetry Level Selection Buttons
         controls = ttk.LabelFrame(self.root, text="Interactive Telemetry Request Panel", padding=10)
         controls.pack(fill="x", padx=10, pady=(0, 5))
 
         self.buttons = {}
-        for mode, label in [("l0", "L0 — Cloud"), ("l1", "L1 — Map"), ("l2", "L2 — Entropy"), ("l3", "L3 — ROI"), ("l4", "L4 — Full")]:
+        for mode, label in [("l0", "L0 — Cloud"), ("l1", "L1 — Map (Vectors)"), ("l2", "L2 — Entropy"), ("l3", "L3 — ROI"), ("l4", "L4 — Full")]:
             btn = ttk.Button(controls, text=label, command=lambda m=mode: self.request_mode(m))
             btn.pack(side="left", padx=4, fill="x", expand=True)
             self.buttons[mode] = btn
 
-        # --- On-Board Gating Array (Uplink Controls) ---
+        # Dynamic Science Gating Array (Uplink Telecommands)
         gate_panel = ttk.LabelFrame(self.root, text="On-Board Science Gate Controller (TTC Command Array)", padding=10)
         gate_panel.pack(fill="x", padx=10, pady=(0, 10))
 
         ttk.Label(gate_panel, text="Shannon Entropy Compression Threshold:", font=("Helvetica", 10)).pack(side="left", padx=(5, 10))
         
         self.gate_slider = tk.Scale(gate_panel, from_=0.0, to=8.0, resolution=0.1, orient="horizontal", length=350, showvalue=True, font=("Helvetica", 9))
-        self.gate_slider.set(2.5) # Default baseline limit
+        self.gate_slider.set(2.5)  # Default baseline threshold
         self.gate_slider.pack(side="left", padx=5)
 
         self.send_gate_button = ttk.Button(gate_panel, text="⟪ Transmit Gate Command", command=self.send_gate_command)
@@ -225,7 +249,7 @@ class AuraGroundUI:
         self.info_var = tk.StringVar(value="System Idle. Awaiting connection.")
         ttk.Label(self.root, textvariable=self.info_var, font=("Courier New", 10, "bold"), padding=(10, 0, 10, 8)).pack(fill="x")
 
-        # --- Core Window Multi-Display Partition ---
+        # Multi-Panel Plot Windows
         main_paned = ttk.PanedWindow(self.root, orient="horizontal")
         main_paned.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -234,16 +258,17 @@ class AuraGroundUI:
         main_paned.add(left_side, weight=1)
         main_paned.add(right_side, weight=1)
 
-        # --- Left Side Multi-Plots ---
+        # Top-Left Landmark Cloud Viewport
         self.fig_cloud, self.ax_cloud = plt.subplots(figsize=(5, 4))
         self.canvas_cloud = FigureCanvasTkAgg(self.fig_cloud, master=left_side)
         self.canvas_cloud.get_tk_widget().pack(fill="both", expand=True, side="top", pady=(0, 5))
 
+        # Bottom-Left Shannon Entropy Topography Viewport
         self.fig_entropy, self.ax_entropy = plt.subplots(figsize=(5, 4))
         self.canvas_entropy = FigureCanvasTkAgg(self.fig_entropy, master=left_side)
         self.canvas_entropy.get_tk_widget().pack(fill="both", expand=True, side="bottom")
 
-        # --- Right Wing Main Scientific Frame ---
+        # Right-Wing Main Science Frame Stream Viewport
         self.fig_image, self.ax_image = plt.subplots(figsize=(6, 8))
         self.canvas_image = FigureCanvasTkAgg(self.fig_image, master=right_side)
         self.canvas_image.get_tk_widget().pack(fill="both", expand=True)
@@ -252,26 +277,24 @@ class AuraGroundUI:
         self._bind_save_contexts()
 
     def _init_plots(self):
-        # Top-Left Landmark Initialization
+        """Initializes empty plot styles, aspect ratios, and color palettes."""
         self.ax_cloud.set_facecolor("#0b0c10")
         self.ax_cloud.set_xlim(0, IMG_WIDTH)
         self.ax_cloud.set_ylim(IMG_HEIGHT, 0)
-        self.ax_cloud.set_title("AURA — L0/L1 Landmark Cloud View")
+        self.ax_cloud.set_title("AURA — L0/L1 Landmark & Vector View")
         self.ax_cloud.set_aspect("equal", adjustable="box")
 
-        # Bottom-Left Entropy Matrix Mapping
         self.im_entropy = self.ax_entropy.imshow(self.heatmap, cmap="jet", interpolation="nearest", vmin=0, vmax=8, extent=CAMERA_EXTENT, origin="upper")
         self.ax_entropy.set_title("AURA — L2 Full Entropy Map")
         self.ax_entropy.set_xlim(0, IMG_WIDTH)
         self.ax_entropy.set_ylim(IMG_HEIGHT, 0)
         self.ax_entropy.set_aspect("equal", adjustable="box")
         
-        # Embedded colorbar via inset_axes to enforce left-border horizontal synchronization
+        # Colorbar synchronized inside axes via inset_axes
         cax = inset_axes(self.ax_entropy, width="3%", height="70%", loc="center right", borderpad=-3.5)
         self.cbar_entropy = self.fig_entropy.colorbar(self.im_entropy, cax=cax)
         self.cbar_entropy.set_label("Shannon Entropy (bits/pixel)", rotation=270, labelpad=15)
 
-        # Right-Wing Main Raster Viewport
         self.im_image = self.ax_image.imshow(self.roi_frame, cmap="gray", vmin=0, vmax=255, interpolation="nearest", extent=CAMERA_EXTENT, origin="upper")
         self.ax_image.set_title("AURA — Main Right-Wing Science Frame Stream")
         self.ax_image.set_xlim(0, IMG_WIDTH)
@@ -283,7 +306,7 @@ class AuraGroundUI:
         self.canvas_image.draw()
 
     def _bind_save_contexts(self):
-        # Binding Mouse Button-3 (Right Click) for 1020x1020 clean canvas exports
+        """Binds Mouse Button-3 (Right Click) across viewports for native 1020x1020 export."""
         self.canvas_cloud.get_tk_widget().bind("<Button-3>", lambda e: self._trigger_save_menu("cloud"))
         self.canvas_entropy.get_tk_widget().bind("<Button-3>", lambda e: self._trigger_save_menu("entropy"))
         self.canvas_image.get_tk_widget().bind("<Button-3>", lambda e: self._trigger_save_menu("image"))
@@ -295,6 +318,7 @@ class AuraGroundUI:
         self.send_gate_button.configure(state=state)
 
     def toggle_connection(self):
+        """Establishes or disconnects the TCP link to the spacecraft simulator."""
         if self.connected:
             self.stop_event.set()
             with self.sock_lock:
@@ -324,6 +348,7 @@ class AuraGroundUI:
         self.receiver_thread.start()
 
     def _recv_loop(self, sock):
+        """Asynchronous background socket listener collecting incoming raw bytes."""
         while not self.stop_event.is_set():
             try:
                 chunk = sock.recv(16384)
@@ -336,6 +361,10 @@ class AuraGroundUI:
         self.events.put(("disconnected", None))
 
     def _parse_buffer(self):
+        """
+        State-machine stream deserializer.
+        Unpacks big-endian telemetry words into coordinates, 4-bit angles, and raw pixel tiles.
+        """
         while True:
             if self.parser_state in ("l0_points", "l1_points", "image_block"):
                 if self.raw_expected <= 0:
@@ -351,38 +380,46 @@ class AuraGroundUI:
                 if len(self.raw_buffer) != self.raw_expected: return
 
                 payload = bytes(self.raw_buffer)
-                if self.parser_state in ("l0_points", "l1_points"):
-                    # Local arrays isolate packet compilation from background thread zapping
+                if self.parser_state == "l0_points":
                     local_x = []
                     local_y = []
-                    local_score = []
+                    record_size = 3
+                    # L0: Sequential 20-bit coordinate unpacking (3 bytes per landmark)
+                    for i in range(len(payload) // record_size):
+                        base = i * record_size
+                        x = (payload[base] << 2) | (payload[base + 1] >> 6)
+                        y = ((payload[base + 1] & 0x3F) << 4) | (payload[base + 2] >> 4)
+                        local_x.append(x)
+                        local_y.append(y)
+                    self.events.put(("l0_points_complete", (local_x, local_y)))
 
-                    if self.parser_state == "l0_points":
-                        record_size = 3
-                        for i in range(len(payload) // record_size):
-                            base = i * record_size
-                            x = (payload[base] << 2) | (payload[base + 1] >> 6)
-                            y = ((payload[base + 1] & 0x3F) << 4) | (payload[base + 2] >> 4)
-                            local_x.append(x)
-                            local_y.append(y)
-                            local_score.append(0)
-                        self.events.put(("l0_points_complete", (local_x, local_y, local_score)))
-                    else:
-                        record_size = 4
-                        for i in range(len(payload) // record_size):
-                            base = i * record_size
-                            # FIX L1: Extract clean 32-bit register from tuple index [0]
-                            word = struct.unpack(">I", payload[base:base + record_size])[0]
-                            
-                            # Bit allocation alignment matching Hello_AURA.c flight target
-                            x = (word >> 18) & 0x03FF  # Bits [27:18] -> 10 bits X
-                            y = (word >> 8) & 0x03FF   # Bits [17:8]  -> 10 bits Y
-                            angle = (word >> 4) & 0x0F  # Bits [7:4]   -> 4 bits local anisotropic vector
-                            
-                            local_x.append(x)
-                            local_y.append(y)
-                            local_score.append(angle * 17) # Scaling 0..15 range up to 0..255 for colour maps
-                        self.events.put(("l1_points_complete", (local_x, local_y, local_score)))
+                elif self.parser_state == "l1_points":
+                    local_x = []
+                    local_y = []
+                    local_angles = []
+                    local_intensities = []
+                    record_size = 4
+                    # L1: 32-bit register unpacking (X, Y, Edge-Tangent Angle, Intensity)
+                    for i in range(len(payload) // record_size):
+                        base = i * record_size
+                        word = struct.unpack(">I", payload[base:base + record_size])[0]
+                        
+                        # Bit allocation alignment matching Hello_AURA.c flight target:
+                        # [Bits 27:18] -> 10 bits X
+                        # [Bits 17:8]  -> 10 bits Y
+                        # [Bits 7:4]   -> 4 bits local anisotropic tangent vector (0..15 sectors)
+                        # [Bits 3:0]   -> 4 bits intensity
+                        x = (word >> 18) & 0x03FF
+                        y = (word >> 8) & 0x03FF
+                        angle = (word >> 4) & 0x0F
+                        intensity = (word & 0x0F) * 17  # Scale 0..15 range to 0..255
+                        
+                        local_x.append(x)
+                        local_y.append(y)
+                        local_angles.append(angle)
+                        local_intensities.append(intensity)
+                    self.events.put(("l1_points_complete", (local_x, local_y, local_angles, local_intensities)))
+
                 else:
                     block = np.frombuffer(payload, dtype=np.uint8).copy().reshape((self.raw_block_h, self.raw_block_w))
                     self.events.put(("image_block_complete", (self.raw_block_mode, self.raw_block_col, self.raw_block_row, block)))
@@ -535,6 +572,7 @@ class AuraGroundUI:
             del self.parser_buffer[0]
 
     def request_mode(self, mode: str):
+        """Transmits an uplink telecommand switching the spacecraft's telemetry level."""
         if not self.connected or self.busy: return
         self.frame_started_bytes = self.rx_bytes_total
         with self.sock_lock:
@@ -549,8 +587,8 @@ class AuraGroundUI:
         self.set_buttons_state(False)
 
     def send_gate_command(self):
+        """Uplinks a parameterized telecommand (AURA GATE <val>) to adjust onboard entropy gating."""
         if not self.connected: return
-        # Scale input floating threshold down to fixed-point integer register for the LEON3 core
         gate_val_x100 = int(round(self.gate_slider.get() * 100))
         command = f"AURA GATE {gate_val_x100}\n".encode('ascii')
         
@@ -562,48 +600,87 @@ class AuraGroundUI:
                 self.status_var.set(f"Tx Error: {exc}")
 
     def _draw_l0_live(self):
-        if self.scatter_cloud: 
-            self.scatter_cloud.remove()
+        """Renders Level 0: Pure (X, Y) coordinate points cloud on black space background."""
+        if self.scatter_cloud:
+            try: self.scatter_cloud.remove()
+            except Exception: pass
+            self.scatter_cloud = None
+
+        if self.vector_collection:
+            try: self.vector_collection.remove()
+            except Exception: pass
+            self.vector_collection = None
+
         if self.cloud_x and self.cloud_y:
-            self.scatter_cloud = self.ax_cloud.scatter(self.cloud_x, self.cloud_y, c="white", s=22, marker="+")
-        else:
-            self.scatter_cloud = self.ax_cloud.scatter([], [], c=[], s=22, marker="+")
-        self.ax_cloud.set_title(f"AURA — L0 Coordinate-Only Cloud ({len(self.cloud_x)} features)")
-        self.canvas_cloud.draw()
+            # s=5 makes the points look like neat, sharp spikes instead of blurry spheres
+            self.scatter_cloud = self.ax_cloud.scatter(
+                self.cloud_x, self.cloud_y, c="#ffffff", s=5, marker="o", zorder=3
+            )
+        self.ax_cloud.set_title(f"AURA — L0 Coordinate Cloud ({len(self.cloud_x)} features)")
+        self.canvas_cloud.draw_idle()
 
     def _draw_l1_live(self):
-        if self.scatter_cloud: 
-            self.scatter_cloud.remove()
+        """
+        Renders Level 1: Topological Feature Map.
+        Draws crisp pinpoint anchor dots with high-contrast tangent whiskers.
+        """
+        if self.scatter_cloud:
+            try: self.scatter_cloud.remove()
+            except Exception: pass
+            self.scatter_cloud = None
+
+        if self.vector_collection:
+            try: self.vector_collection.remove()
+            except Exception: pass
+            self.vector_collection = None
+
         if self.cloud_x and self.cloud_y:
-            self.scatter_cloud = self.ax_cloud.scatter(
-                self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=255, s=18, marker="+"
+            # 1. An antenna length of 24.0 in the coordinate system corresponds to exactly ~8 pixels in the UI widget
+            vec_len = 24.0
+            segments = []
+            for x, y, ang in zip(self.cloud_x, self.cloud_y, self.cloud_angles):
+                rad = ang * (22.5 * np.pi / 180.0)
+                x2 = x + vec_len * np.cos(rad)
+                y2 = y + vec_len * np.sin(rad)
+                segments.append([(x, y), (x2, y2)])
+
+            # 2. Draw bright neon-yellow tangent lines
+            self.vector_collection = LineCollection(
+                segments, colors="#ffe600", linewidths=1.5, zorder=2
             )
-        else:
-            self.scatter_cloud = self.ax_cloud.scatter([], [], c=[], s=18, marker="+")
-        self.ax_cloud.set_title(f"AURA — L1 Landmark + Intensity Stream ({len(self.cloud_x)} points)")
-        self.canvas_cloud.draw()
+            self.ax_cloud.add_collection(self.vector_collection)
+
+            # 3. Small, compact red center points (s=4 does not overlap the line)
+            self.scatter_cloud = self.ax_cloud.scatter(
+                self.cloud_x, self.cloud_y, c="#ff2233", s=4, zorder=3
+            )
+
+        self.ax_cloud.set_title(f"AURA — L1 Landmarks & Vectors ({len(self.cloud_x)} points)")
+        self.canvas_cloud.draw_idle()
 
     def _draw_l2_live(self):
-        # Speed optimized local refresh bounding data coordinates only
+        """High-frequency blitting update of the 64x64 Shannon entropy heatmap."""
         self.im_entropy.set_data(self.heatmap)
         self.ax_entropy.set_title(f"AURA — L2 Adaptive Grid ({self.heatmap_received_blocks} blocks)")
         
-        # High frequency blitting: update only the mapping artist to avoid colorbar lag blocks
         self.ax_entropy.draw_artist(self.im_entropy)
         self.fig_entropy.canvas.blit(self.ax_entropy.bbox)
 
     def _draw_l3_live(self):
+        """Progressive visual reconstruction of the gated Sparse ROI frame."""
         self.im_image.set_data(self.roi_frame)
         priority_name = "entropy" if getattr(self, "roi_priority_mode", 0) == 0 else "brightness"
         self.ax_image.set_title(f"AURA — L3 ROI Gated Reconstruction ({self.roi_received_blocks} blocks, {priority_name} priority)")
         self.canvas_image.draw_idle()
 
     def _draw_l4_live(self):
+        """Visual rendering of the uncompressed progressive bilateral vertical scan."""
         self.im_image.set_data(self.l4_frame)
         self.ax_image.set_title(f"AURA — L4 Full Progressive Raster ({self.l4_received_blocks} blocks)")
         self.canvas_image.draw_idle()
 
     def _trigger_save_menu(self, channel_type):
+        """Native 1020x1020 high-fidelity export without borders or UI decorations."""
         file_path = filedialog.asksaveasfilename(
             defaultextension=".png",
             filetypes=[("PNG Image", "*.png"), ("JPEG Image", "*.jpg;*.jpeg")],
@@ -625,7 +702,6 @@ class AuraGroundUI:
                     image.save(file_path, format="PNG")
                 return
 
-            # Hardening figure background parameters to completely override default white flushing
             export_fig = plt.figure(figsize=(10.2, 10.2), dpi=100, facecolor="#0b0c10")
             export_ax = export_fig.add_axes([0, 0, 1, 1], facecolor="#0b0c10")
             export_ax.set_xlim(0, IMG_WIDTH)
@@ -634,9 +710,21 @@ class AuraGroundUI:
 
             if channel_type == "cloud":
                 if self.current_mode == "l0":
-                    export_ax.scatter(self.cloud_x, self.cloud_y, c="white", s=30, marker="+")
+                    export_ax.scatter(self.cloud_x, self.cloud_y, c="white", s=25, marker="o")
                 else:
-                    export_ax.scatter(self.cloud_x, self.cloud_y, c=self.cloud_score, cmap="plasma", vmin=0, vmax=255, s=25, marker="+")
+                    # Export L1 with matching tangent whiskers and landmark centers
+                    vec_len = 14.0
+                    segments = []
+                    for x, y, ang in zip(self.cloud_x, self.cloud_y, self.cloud_angles):
+                        rad = ang * (22.5 * np.pi / 180.0)
+                        x2 = x + vec_len * np.cos(rad)
+                        y2 = y + vec_len * np.sin(rad)
+                        segments.append([(x, y), (x2, y2)])
+                    
+                    lc = LineCollection(segments, colors="#ffd700", linewidths=1.5, zorder=2)
+                    export_ax.add_collection(lc)
+                    export_ax.scatter(self.cloud_x, self.cloud_y, c="#ff3344", s=14, zorder=3)
+
             elif channel_type == "entropy":
                 export_ax.imshow(
                     self.heatmap,
@@ -649,20 +737,19 @@ class AuraGroundUI:
                     aspect="auto",
                 )
 
-            # Explicit facecolor transport overrides unmanaged frame borders
             export_fig.savefig(file_path, format="png", dpi=100, pad_inches=0, facecolor=export_fig.get_facecolor(), edgecolor='none')
             plt.close(export_fig)
         except Exception as exc:
             messagebox.showerror("AURA export error", f"Could not save {file_path}: {exc}")
 
     def _log_to_csv(self, current_mode_str, wire_bytes, saving_pct, ratio):
+        """Appends verified wire transmission metrics into the CSV mission audit log."""
         os.makedirs(os.path.dirname(CSV_LOG_FILE), exist_ok=True)
         file_exists = os.path.isfile(CSV_LOG_FILE)
         try:
             with open(CSV_LOG_FILE, mode="a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    # Registry columns trace dynamic uplinked gates next to telemetry modes
                     writer.writerow([
                         "Timestamp", 
                         "Telemetry_Level", 
@@ -674,7 +761,7 @@ class AuraGroundUI:
                     ])
                 
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                if current_mode_str == "l0" or current_mode_str == "l1":
+                if current_mode_str in ("l0", "l1"):
                     detail = f"{len(self.cloud_x)} landmarks"
                 elif current_mode_str == "l2":
                     detail = f"{self.heatmap_received_blocks} entropy blocks"
@@ -698,6 +785,7 @@ class AuraGroundUI:
             print(f"Mission Log Write Failure: {e}")
 
     def _process_events(self):
+        """Main UI event loop dispatcher draining the queue without blocking."""
         try:
             burst_counter = 0
             while burst_counter < 2000:
@@ -732,9 +820,12 @@ class AuraGroundUI:
 
                 elif kind == "header_init":
                     self.info_var.set(f"Streaming package for channel {payload.upper()} incoming...")
-                    if payload == "l0" or payload == "l1":
-                        # Synchronous cleaning strictly in UI loop prevents async background thread race conditions
-                        self.cloud_x, self.cloud_y, self.cloud_score = [], [], []
+                    if payload in ("l0", "l1"):
+                        self.cloud_x, self.cloud_y, self.cloud_angles, self.cloud_intensity = [], [], [], []
+                        if self.vector_collection:
+                            try: self.vector_collection.remove()
+                            except Exception: pass
+                            self.vector_collection = None
                         if self.scatter_cloud:
                             try: self.scatter_cloud.remove()
                             except Exception: pass
@@ -742,26 +833,25 @@ class AuraGroundUI:
                         self.ax_cloud.set_facecolor("#0b0c10")
                         self.ax_cloud.set_xlim(0, IMG_WIDTH)
                         self.ax_cloud.set_ylim(IMG_HEIGHT, 0)
-                        self.canvas_cloud.draw()
+                        self.canvas_cloud.draw_idle()
                     elif payload == "l2":
                         self.heatmap = np.zeros((self.heatmap_rows, self.heatmap_cols), dtype=np.float32)
                         self.heatmap_received_blocks = 0
                         self._draw_l2_live()
 
-                elif kind == "l0_points_complete" or kind == "l1_points_complete":
-                    # Thread safe array delivery safely unpacked inside main layout thread
-                    self.cloud_x, self.cloud_y, self.cloud_score = payload
-                    if kind == "l0_points_complete":
-                        self._draw_l0_live()
-                    else:
-                        self._draw_l1_live()
+                elif kind == "l0_points_complete":
+                    self.cloud_x, self.cloud_y = payload
+                    self._draw_l0_live()
+
+                elif kind == "l1_points_complete":
+                    self.cloud_x, self.cloud_y, self.cloud_angles, self.cloud_intensity = payload
+                    self._draw_l1_live()
 
                 elif kind == "l2_block":
                     r, c, val = payload
                     if r < self.heatmap_rows and c < self.heatmap_cols:
                         self.heatmap[r, c] = val
                         self.heatmap_received_blocks += 1
-                        # Fast streaming update interval tracking progressive vertical scanning stripes
                         if self.heatmap_received_blocks % 16 == 0: 
                             self._draw_l2_live()
 
@@ -799,10 +889,9 @@ class AuraGroundUI:
                     if self.current_mode == "l0": self._draw_l0_live()
                     elif self.current_mode == "l1": self._draw_l1_live()
                     elif self.current_mode == "l2": 
-                        # Absolute hard draw verification routine on frame transmission completion
                         self.im_entropy.set_data(self.heatmap)
                         self.ax_entropy.set_title(f"AURA — L2 Adaptive Grid ({self.heatmap_received_blocks} blocks)")
-                        self.canvas_entropy.draw()
+                        self.canvas_entropy.draw_idle()
                     elif self.current_mode == "l3": self._draw_l3_live()
                     elif self.current_mode == "l4": self._draw_l4_live()
 
@@ -830,10 +919,12 @@ class AuraGroundUI:
         plt.close('all')
         self.root.destroy()
 
+
 def main():
     root = tk.Tk()
     AuraGroundUI(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()

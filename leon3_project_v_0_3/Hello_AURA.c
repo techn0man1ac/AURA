@@ -193,31 +193,65 @@ static int ceil_div_int(int a, int b)
 }
 
 /* =========================================================================
-   FEATURE EXTRACTION: CROSS-DIFFERENCE OPERATOR & DIRECTION ESTIMATION
-   Computes luminance gradient magnitude and estimates vector orientation
-   in 16 discrete sectors (4 bits) without trigonometric float routines.
+   FEATURE EXTRACTION: CROSS-DIFFERENCE & 4-BIT TANGENT ORIENTATION
+   Computes gradient magnitude and calculates the 4-bit edge-tangent angle
+   (16 sectors, 22.5 deg each) in pure integer math without atan2f() or FPU.
    ========================================================================= */
 
 static unsigned int contrast_score_at(int x, int y, unsigned char *angle_out)
 {
   unsigned char *img = (unsigned char *)IMAGE_ADDRESS;
+  
   /* Cross displacement stencil with +/- 8-pixel arms */
   int p_top   = img[(y - 8) * IMG_WIDTH + x];
   int p_down  = img[(y + 8) * IMG_WIDTH + x];
   int p_left  = img[y * IMG_WIDTH + (x - 8)];
   int p_right = img[y * IMG_WIDTH + (x + 8)];
 
-  unsigned int dv = abs_int(p_top - p_down); /* Vertical delta */
-  unsigned int dh = abs_int(p_left - p_right); /* Horizontal delta */
+  /* КРОК 1: Зберігаємо знаки дельт (+/-) для визначення повного кола 360° */
+  int dv = p_top - p_down;
+  int dh = p_left - p_right;
 
-  /* 4-bit orientation estimation (0..15 sectors) without atan2f() */
+  unsigned int abs_v = abs_int(dv);
+  unsigned int abs_h = abs_int(dh);
+  unsigned int score = abs_v + abs_h;
+
   if (angle_out != 0) {
-    if (dh == 0 && dv == 0) *angle_out = 0;
-    else if (dh > dv) *angle_out = (unsigned char)((dv * 7U) / dh);
-    else *angle_out = (unsigned char)(8U + (dh * 7U) / (dv ? dv : 1U));
+    if (score == 0) {
+      *angle_out = 0;
+    } else {
+      /* КРОК 2: Поворот на +90° у вектор дотичної: T_x = -dv, T_y = dh */
+      int tx = -dv;
+      int ty = dh;
+      unsigned int atx = abs_int(tx);
+      unsigned int aty = abs_int(ty);
+
+      /* КРОК 3: Визначення октанта (сегмента 45°) за квадрантами знаків */
+      int oct;
+      if (tx >= 0 && ty >= 0) {
+        oct = (atx >= aty) ? 0 : 1;
+      } else if (tx < 0 && ty >= 0) {
+        oct = (aty >= atx) ? 2 : 3;
+      } else if (tx < 0 && ty < 0) {
+        oct = (atx >= aty) ? 4 : 5;
+      } else {
+        oct = (aty >= atx) ? 6 : 7;
+      }
+
+      /* КРОК 4: Поділ октанта навпіл на сектори 22.5° через tan(22.5°) ~ 414/1000 */
+      int sub;
+      if ((oct & 1) == 0) {
+        sub = (aty * 1000U >= atx * 414U) ? 1 : 0;
+      } else {
+        sub = (atx * 1000U <= aty * 414U) ? 1 : 0;
+      }
+
+      /* Підсумковий 4-бітний сектор дотичної (0..15) */
+      *angle_out = (unsigned char)((oct * 2 + sub) & 0x0FU);
+    }
   }
 
-  return dv + dh;
+  return score;
 }
 
 /* Builds spatial candidate grid and applies 8-way Non-Maximum Suppression */
