@@ -1,4 +1,4 @@
-# AURA — Civil Space Exploration Principles & Community Guidelines
+# AURA - Civil Space Exploration Principles & Community Guidelines
 
 ## 1. Our Mission: Peaceful Civil Space Exploration
 
