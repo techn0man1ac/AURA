@@ -1,6 +1,6 @@
 # AURA: Autonomous Unsupervised Feature-Tracking for Real-Time Deep-Space Navigation
 
-![AURA Ground Station](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/develop/leon3_project_v_0_3/AURA_GrndSeg_Screenshot.png)
+![AURA Ground Station](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/leon3_project_v_0_3/AURA_GrndSeg_Screenshot.png)
 
 ## Project Overview
 **AURA** is an experimental on-board flight software pipeline designed for real-time, resource-constrained edge computing during deep-space small-body rendezvous operations. The primary objective of the architecture is to process high-resolution optical matrices locally, compute statistical data density patterns, and isolate high-entropy regions of interest (ROI) to facilitate autonomous proximity operations without saturated communication downlinks.
