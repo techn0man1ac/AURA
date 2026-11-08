@@ -75,19 +75,24 @@ To avoid high CPU parsing overhead and prevent communication channel saturation,
 
 ---
 
-### 1. Level 2 (L2): 32-Bit Shannon Entropy Grid Word (`MARKER_L2_ENTROPY = 0xD1`)
-Every spatial block in the $64 \times 64$ terrain map is packed into a single 4-byte telemetry word:
+### 1. Level 0 (L0): 20-Bit Ultra-Sparse Coordinate Packing (`MARKER_L0_HEADER = 0x5B`)
 
-| Bit Range | Field Name | Width | Type | Description |
-| :---: | :--- | :---: | :---: | :--- |
-| **[31:24]** | `SYNC_MARKER` | 8 bits | `uint8` | Frame sync and protocol identifier (`0xD1`). |
-| **[23:16]** | `COL_INDEX` | 8 bits | `uint8` | Block column coordinate layout ($X$-axis grid index, 0..63). |
-| **[15:8]** | `ROW_INDEX` | 8 bits | `uint8` | Block row coordinate layout ($Y$-axis grid index, 0..63). |
-| **[7:0]** | `ENTROPY_X10` | 8 bits | `uint8` | Scaled Shannon Entropy value ($\text{Entropy} \times 10$, range 0..80 bits/pixel). |
+![AURA Level 0 visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_L0.png)
+
+In the ultra-constrained L0 mode, 4-byte padding is eliminated completely. Coordinates are packed sequentially into **3 consecutive bytes (24 bits)** per point to maximize DSN bandwidth efficiency:
+
+* **Byte 0:** `COORD_X[9:2]` (Upper 8 bits of X)
+* **Byte 1:** `COORD_X[1:0]` (Lower 2 bits of X) `|` `COORD_Y[9:6]` (Upper 4 bits of Y)
+* **Byte 2:** `COORD_Y[5:0]` (Lower 6 bits of Y) `|` `00` (Zero padding)
+
+*Efficiency Gain:* Transmitting 100 surface landmarks requires only **300 bytes of payload**, achieving a **99.98% volume reduction** compared to the raw frame.
 
 ---
 
 ### 2. Level 1 (L1): 32-Bit Directional Surface Landmark Word (`MARKER_L1_HEADER = 0xB1`)
+
+![AURA Level 1 visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_L1.png)
+
 Transforms raw $(X, Y)$ coordinate points into orientation-aware topological descriptors without floating-point math:
 
 | Bit Range | Field Name | Width | Type | Description |
@@ -100,18 +105,50 @@ Transforms raw $(X, Y)$ coordinate points into orientation-aware topological des
 
 ---
 
-### 3. Level 0 (L0): 20-Bit Ultra-Sparse Coordinate Packing (`MARKER_L0_HEADER = 0x5B`)
-In the ultra-constrained L0 mode, 4-byte padding is eliminated completely. Coordinates are packed sequentially into **3 consecutive bytes (24 bits)** per point to maximize DSN bandwidth efficiency:
+### 3. Level 2 (L2): 32-Bit Shannon Entropy Grid Word (`MARKER_L2_ENTROPY = 0xD1`)
 
-* **Byte 0:** `COORD_X[9:2]` (Upper 8 bits of X)
-* **Byte 1:** `COORD_X[1:0]` (Lower 2 bits of X) `|` `COORD_Y[9:6]` (Upper 4 bits of Y)
-* **Byte 2:** `COORD_Y[5:0]` (Lower 6 bits of Y) `|` `00` (Zero padding)
+![AURA Level 2 visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_L2.png)
 
-*Efficiency Gain:* Transmitting 100 surface landmarks requires only **300 bytes of payload**, achieving a **99.98% volume reduction** compared to the raw frame.
+Every spatial block in the $64 \times 64$ terrain map is packed into a single 4-byte telemetry word:
+
+| Bit Range | Field Name | Width | Type | Description |
+| :---: | :--- | :---: | :---: | :--- |
+| **[31:24]** | `SYNC_MARKER` | 8 bits | `uint8` | Frame sync and protocol identifier (`0xD1`). |
+| **[23:16]** | `COL_INDEX` | 8 bits | `uint8` | Block column coordinate layout ($X$-axis grid index, 0..63). |
+| **[15:8]** | `ROW_INDEX` | 8 bits | `uint8` | Block row coordinate layout ($Y$-axis grid index, 0..63). |
+| **[7:0]** | `ENTROPY_X10` | 8 bits | `uint8` | Scaled Shannon Entropy value ($\text{Entropy} \times 10$, range 0..80 bits/pixel). |
 
 ---
 
-### 4. Hardware Serialization & SPARC Trap 0x07 Mitigation
+### 4. Level 3 (L3): Sparse Gated ROI Block Stream (`MARKER_L3_HEADER = 0xD3`)
+
+![AURA Level 3 visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_L3.png)
+
+L3 is AURA's **primary scientific downlink mode**. It reconstructs the physical asteroid surface losslessly while completely zeroing out empty space vacuum. 
+
+The transmission mask is generated onboard via a **Logical UNION**:
+$$\text{ROI} = \text{Landmarks Dilation }(A) \cup \text{High-Entropy Mask }(B)$$
+
+To maximize scientific return during premature signal loss, candidate blocks are sorted in deterministic $O(N)$ time via an **81-bucket linear sort** and streamed **highest-entropy first**.
+
+Each active block is transmitted as a **4-byte synchronization header** immediately followed by raw 8-bit uncompressed grayscale pixel bytes ($16 \times 16 = 256$ bytes, clipped at frame margins):
+
+#### 32-Bit ROI Block Coordinate Word (`MARKER_L3_BLOCK = 0xD5`):
+
+| Bit Range | Field Name | Width | Type | Description |
+| :---: | :--- | :---: | :---: | :--- |
+| **[31:24]** | `SYNC_MARKER` | 8 bits | `uint8` | ROI block payload identifier (`0xD5`). |
+| **[23:16]** | `COL_INDEX`   | 8 bits | `uint8` | Block column coordinate layout ($X$-axis grid index, 0..63). |
+| **[15:8]**  | `ROW_INDEX`   | 8 bits | `uint8` | Block row coordinate layout ($Y$-axis grid index, 0..63). |
+| **[7:0]**   | `RESERVED`    | 8 bits | —     | Reserved / boundary status byte (default: `0x00`). |
+
+*   **Pixel Stream:** 256 contiguous bytes (`uint8`) streamed directly from camera SRAM per block.
+*   **Vacuum Rejection:** An onboard gating filter (`entropy_x10 >= threshold_x10`) prevents landmark dilations from leaking into zero-entropy vacuum.
+*   **Efficiency Gain(simple eaxmple):** Downlinks only ~31% of the total sensor area (1,242–1,292 blocks out of 4,096), delivering **~68.8% to 80% bandwidth savings** with zero loss of surface texture detail.
+
+---
+
+### 5. Hardware Serialization & SPARC Trap 0x07 Mitigation
 On RISC/SPARC V8 architectures, unaligned 32-bit word store instructions (`st`) to physical peripheral address spaces trigger a fatal hardware exception: **Data Access Alignment Trap (Trap 0x07)**.
 
 To enforce deterministic hardware safety:
