@@ -1,56 +1,76 @@
-# AURA Code of Conduct & Civil Space Exploration Pledge
+# AURA — Civil Space Exploration Principles & Community Guidelines
 
-## 1. Peaceful & Exclusively Civil Purpose (The ESA Mandate)
+## 1. Our Mission: Peaceful Civil Space Exploration
 
-AURA (*Autonomous Unsupervised Feature-Tracking for Real-Time Deep-Space Navigation*) was conceived and developed strictly as an open, civilian scientific instrument for planetary exploration, asteroid rendezvous, and autonomous space science.
+AURA (*Autonomous Unsupervised Feature-Tracking for Real-Time Deep-Space Navigation*) was conceived and developed as an open-source civilian scientific project, intended to contribute to planetary exploration, asteroid rendezvous, and autonomous space science.
 
-In direct alignment with:
-* **Article II of the Convention for the Establishment of the European Space Agency (ESA):**  
-  > *"The purpose of the Agency shall be to provide for and to promote, for exclusively peaceful purposes, cooperation among European States in space research and technology and their space applications..."*
-* **The United Nations Outer Space Treaty (1967):**  
-  > *"The exploration and use of outer space shall be carried out for the benefit and in the interests of all countries... and shall be the province of all mankind."*
+Our work is inspired by the principles of international cooperation and peaceful exploration expressed in:
 
-### Our Non-Military Commitment:
-1. **Civil Science Only:** This codebase, its algorithms, and derived models are intended solely for peaceful, civil space missions, scientific research, academic education, and humanitarian exploration of the Solar System.
-2. **Exclusion of Weaponry & Munitions:** Contributors, researchers, and adopting parties are urged **never** to utilize, modify, or integrate this software into offensive guidance systems, missile avionics, kinetic impactors designed as munitions, autonomous lethal weapons, or surveillance systems targeting human populations.
-3. **Open Science & Reproducibility:** Knowledge regarding the cosmos belongs to humankind. We champion transparent algorithms, verifiable embedded engineering, and open civilian scientific collaboration.
+- **Article II of the Convention for the Establishment of the European Space Agency (ESA):**  
+  > "The purpose of the Agency shall be to provide for and to promote, for exclusively peaceful purposes, cooperation among European States in space research and technology and its space applications..."
 
----
+- **The United Nations Outer Space Treaty (1967):**  
+  > "The exploration and use of outer space shall be carried out for the benefit and in the interests of all countries... and shall be the province of all mankind."
 
-## 2. Our Community Standards
+### Our Civil and Peaceful Intent
 
-As contributors, maintainers, and researchers in the AURA open-source ecosystem, we pledge to foster an open, welcoming, diverse, and respectful environment.
+1. **Civilian Scientific Applications:** AURA is developed with peaceful civilian space missions in mind, including scientific research, academic education, planetary exploration, and humanitarian applications.
 
-### Positive Behaviors:
-* Demonstrating technical humility, scientific honesty, and factual rigor.
-* Prioritizing verifiable empirical measurements over marketing claims.
-* Welcoming contributors regardless of nationality, origin, background, language proficiency, or academic status.
-* Offering and gracefully accepting constructive technical critiques.
-* Upholding the ethics of civil engineering and product safety.
+2. **Responsible Use:** The project is not intended for military or weapons-related applications. We strongly encourage users and adopting organizations to respect this purpose and avoid integrating AURA into offensive weapon systems, missile guidance, autonomous lethal systems, or surveillance applications targeting human populations.
 
-### Unacceptable Behaviors:
-* Advocating for or actively implementing offensive defense/military integrations within this repository.
-* Plagiarism, falsification of experimental logs, or misrepresentation of benchmarks.
+3. **Open Science and Collaboration:** We believe that knowledge gained through space exploration should benefit humanity. We support transparent algorithms, reproducible experiments, open engineering practices, and international scientific collaboration.
 
 ---
 
-## 3. Dual-Use Awareness & Contributor Responsibility
+## 2. Our Community
 
-We acknowledge that computer vision, visual odometry, and edge-computing algorithms carry inherent dual-use potential. While the core codebase is released under the permissive [MIT License](LICENSE) to support global open science:
+AURA aims to support an open, welcoming, and respectful environment for developers, researchers, students, and anyone interested in civilian space technology.
 
-* We formally urge all organizations and individuals adopting AURA to respect the civil and peaceful intent of its creators.
-* Contributors are expected to uphold ethical foresight, ensuring pull requests, documentation, and feature developments remain oriented toward civil spaceflight (e.g., small-body proximity operations, CubeSat docking, lunar/planetary mapping).
+### Values We Encourage
+
+- **Scientific integrity:** Being technically humble, honest, and precise in describing results and limitations.
+- **Evidence over claims:** Prioritizing reproducible experiments and verifiable measurements over marketing statements.
+- **Openness and inclusion:** Welcoming contributors regardless of nationality, background, language proficiency, or academic affiliation.
+- **Constructive collaboration:** Sharing technical knowledge, offering thoughtful feedback, and being receptive to different perspectives.
+- **Responsible engineering:** Considering safety, reliability, and the broader impact of the technologies we develop.
+
+### Community Conduct
+
+We expect participants to engage respectfully and contribute constructively. Behavior inconsistent with these principles includes:
+
+- Promoting or actively developing military or offensive weapon applications within the AURA project.
+- Plagiarism, falsification of experimental results, or intentional misrepresentation of technical capabilities.
+- Harassment, discrimination, or conduct that undermines a respectful collaborative environment.
 
 ---
 
-## 4. Enforcement & Contact
+## 3. Dual-Use Awareness and Shared Responsibility
 
-Instances of abusive, harassing, or unethical behavior contrary to this Code of Conduct may be reported directly to the project maintainer:
+We recognize that technologies such as computer vision, visual odometry, and edge computing can have applications beyond their original civilian purpose.
 
-* **Maintainer:** Serhii Trush
-* **Project Repository:** [https://github.com/techn0man1ac/AURA](https://github.com/techn0man1ac/AURA)
+AURA is released under the permissive **MIT License** to encourage research, education, transparency, and broad participation in open-source development.
 
-All reports will be reviewed promptly and impartially. The maintainer reserves the right to remove, edit, or reject comments, commits, issues, or pull requests that violate this pledge.
+At the same time:
+
+- We encourage individuals and organizations adopting AURA to respect the peaceful and civilian purpose behind its development.
+- We welcome contributions that advance scientific research and civilian space applications, such as small-body exploration, planetary mapping, CubeSat operations, and autonomous spacecraft servicing.
+- We encourage contributors to consider the wider implications of their work when proposing new features, integrations, or applications.
+
+This statement expresses the project's mission and community values. It does not replace or modify the terms of the MIT License.
 
 ---
-*Adopted with reverence for peaceful scientific discovery and the shared human voyage to the stars.*
+
+## 4. Community Support and Contact
+
+We believe that a healthy open-source project depends on mutual respect, transparent communication, and shared responsibility.
+
+Questions, concerns, or reports regarding conduct within the AURA community may be directed to the project maintainer:
+
+- **Maintainer:** Serhii Trush
+- **Project Repository:** [https://github.com/techn0man1ac/AURA](https://github.com/techn0man1ac/AURA)
+
+Reports will be reviewed as promptly and impartially as reasonably possible. The maintainer may moderate discussions and contributions when necessary to preserve the project's technical integrity and the respectful, civilian-oriented character of the community.
+
+---
+
+*Created in the spirit of peaceful scientific discovery, international cooperation, and humanity's shared journey toward understanding the Solar System and beyond.*
