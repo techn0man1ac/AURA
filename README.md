@@ -124,7 +124,7 @@ Every spatial block in the $64 \times 64$ terrain map is packed into a single 4-
 
 ![AURA Level 3 visualization](https://raw.githubusercontent.com/techn0man1ac/AURA/refs/heads/main/Img/AURA_L3.png)
 
-L3 is AURA's **primary scientific downlink mode**. It reconstructs the physical asteroid surface losslessly while completely zeroing out empty space vacuum. 
+L3 is AURA's **primary scientific downlink mode**. It reconstructs the physical asteroid surface losslessly while completely zeroing out empty space vacuum(the brightness and contrast of the image have been adjusted to improve the algorithm's performance).
 
 The transmission mask is generated onboard via a **Logical UNION**:
 $$\text{ROI} = \text{Landmarks Dilation }(A) \cup \text{High-Entropy Mask }(B)$$
