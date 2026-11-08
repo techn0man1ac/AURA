@@ -44,19 +44,15 @@ We expect participants to engage respectfully and contribute constructively. Beh
 
 ---
 
-## 3. Dual-Use Awareness and Shared Responsibility
+## 3. Civilian Purpose and Ethical Use
 
-We recognize that technologies such as computer vision, visual odometry, and edge computing can have applications beyond their original civilian purpose.
+AURA is developed exclusively for peaceful civilian space exploration, scientific research, and educational purposes.
 
-AURA is released under the permissive **[MIT License](https://github.com/techn0man1ac/AURA/blob/main/LICENSE)** to encourage research, education, transparency, and broad participation in open-source development.
+We do not support the use of AURA in military applications, weapons systems, targeting technologies, or autonomous systems intended to cause harm.
 
-At the same time:
+Our goal is to advance space exploration through open science, responsible engineering, and international cooperation.
 
-- We encourage individuals and organizations adopting AURA to respect the peaceful and civilian purpose behind its development.
-- We welcome contributions that advance scientific research and civilian space applications, such as small-body exploration, planetary mapping, CubeSat operations, and autonomous spacecraft servicing.
-- We encourage contributors to consider the wider implications of their work when proposing new features, integrations, or applications.
-
-This statement expresses the project's mission and community values. It does not replace or modify the terms of the MIT License.
+This statement reflects the project's ethical principles and does not modify the terms of the [MIT License](https://github.com/techn0man1ac/AURA/blob/main/LICENSE).
 
 ---
 
