@@ -48,7 +48,7 @@ We expect participants to engage respectfully and contribute constructively. Beh
 
 We recognize that technologies such as computer vision, visual odometry, and edge computing can have applications beyond their original civilian purpose.
 
-AURA is released under the permissive **MIT License** to encourage research, education, transparency, and broad participation in open-source development.
+AURA is released under the permissive **[MIT License](https://github.com/techn0man1ac/AURA/blob/main/LICENSE)** to encourage research, education, transparency, and broad participation in open-source development.
 
 At the same time:
 
