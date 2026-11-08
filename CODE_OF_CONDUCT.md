@@ -31,8 +31,6 @@ As contributors, maintainers, and researchers in the AURA open-source ecosystem,
 ### Unacceptable Behaviors:
 * Advocating for or actively implementing offensive defense/military integrations within this repository.
 * Plagiarism, falsification of experimental logs, or misrepresentation of benchmarks.
-* Personal attacks, harassment, derogatory language, or political discrimination.
-* Public or private harassment of community members.
 
 ---
 
